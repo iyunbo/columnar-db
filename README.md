@@ -1,6 +1,6 @@
 # Columnar DB 🏗️
 
-Building a column-oriented analytical database from scratch — inspired by ClickHouse & SingleStore.
+Building a column-oriented analytical database from scratch in Go — inspired by ClickHouse, DuckDB & SingleStore.
 
 ## Why
 
@@ -10,14 +10,16 @@ The best way to understand distributed analytical databases is to build one. No 
 
 | Phase | Topic | Status |
 |-------|-------|--------|
-| 1 | **Storage Engine** — Column-oriented storage format, compression, encoding | ⬜ |
-| 2 | **Query Engine** — Vectorized execution, expression evaluation | ⬜ |
-| 3 | **SQL Parser** — Basic SQL parsing and query planning | ⬜ |
-| 4 | **Query Optimizer** — Cost-based optimization, predicate pushdown | ⬜ |
-| 5 | **Indexing** — Sparse indexes, skip indexes, zone maps | ⬜ |
-| 6 | **Aggregation** — Hash aggregation, streaming aggregation | ⬜ |
+| 1 | **Column Storage** — Column-oriented file format, types, null bitmap, row groups | ⬜ |
+| 2 | **Encoding & Compression** — RLE, dictionary, delta encoding, LZ4 | ⬜ |
+| 3 | **Vectorized Scan** — Batch processing, filters, projections, selection vectors | ⬜ |
+| 4 | **Aggregation** — Hash GROUP BY, COUNT/SUM/AVG/MIN/MAX | ⬜ |
+| 5 | **SQL Parser** — Lexer, recursive descent parser, query planner | ⬜ |
+| 6 | **Query Optimizer** — Predicate pushdown, projection pushdown, zone maps | ⬜ |
 | 7 | **Joins** — Hash join, sort-merge join | ⬜ |
-| 8 | **Distributed** — Sharding, replication, distributed query execution | ⬜ |
+| 8 | **Distributed** — Sharding, scatter-gather, distributed aggregation | ⬜ |
+
+See [docs/plan.md](docs/plan.md) for detailed phase breakdowns and deliverables.
 
 ## Architecture
 
@@ -28,8 +30,9 @@ The best way to understand distributed analytical databases is to build one. No 
 │  Parser → Planner → Optimizer       │
 ├─────────────────────────────────────┤
 │       Vectorized Query Engine       │
+│    (vectors, filters, aggregates)   │
 ├─────────────────────────────────────┤
-│  Column Store │ Indexes │ Compression│
+│  Column Store │ Encoding │ Zone Maps │
 ├─────────────────────────────────────┤
 │         Storage Engine (Disk)       │
 └─────────────────────────────────────┘
@@ -44,17 +47,15 @@ The best way to understand distributed analytical databases is to build one. No 
 ## Key Concepts Explored
 
 - **Columnar storage** — Why columns beat rows for analytics
-- **Vectorized execution** — Processing data in batches, not row-by-row
-- **Compression** — Run-length encoding, dictionary encoding, delta encoding
-- **Sparse indexing** — How ClickHouse skips irrelevant data blocks
+- **Vectorized execution** — Processing data in batches of 1024, not row-by-row
+- **Encoding** — RLE, dictionary, delta — column-type-aware compression
+- **Zone maps** — Min/max per chunk → skip irrelevant data blocks
 - **Distributed execution** — Scatter-gather query patterns across shards
 
-## Reference
+## Documentation
 
-- 📖 [ClickHouse Documentation](https://clickhouse.com/docs)
-- 📖 [CMU Database Systems Course](https://15445.courses.cs.cmu.edu/)
-- 📖 [Designing Data-Intensive Applications](https://dataintensive.net/) by Martin Kleppmann
-- 💻 [ClickHouse Source](https://github.com/ClickHouse/ClickHouse)
+- [Detailed Plan](docs/plan.md) — 8-phase breakdown with deliverables and success criteria
+- [References](docs/references.md) — Papers, courses, code references, phase-specific reading order
 
 ## Author
 
