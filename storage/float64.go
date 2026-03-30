@@ -1,0 +1,31 @@
+package storage
+
+// Float64Column stores a contiguous slice of float64 values.
+type Float64Column struct {
+	data []float64
+}
+
+func NewFloat64Column() *Float64Column {
+	return &Float64Column{}
+}
+
+func NewFloat64ColumnFromSlice(data []float64) *Float64Column {
+	cp := make([]float64, len(data))
+	copy(cp, data)
+	return &Float64Column{data: cp}
+}
+
+func (c *Float64Column) Type() ColumnType { return TypeFloat64 }
+func (c *Float64Column) Len() int         { return len(c.data) }
+
+func (c *Float64Column) Append(v float64) {
+	c.data = append(c.data, v)
+}
+
+func (c *Float64Column) Get(i int) float64 {
+	return c.data[i]
+}
+
+func (c *Float64Column) Values() []float64 {
+	return c.data
+}

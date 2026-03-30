@@ -1,0 +1,35 @@
+package storage
+
+// BoolColumn stores a contiguous slice of bool values.
+//
+// Note: Go's []bool uses 1 byte per value, not 1 bit.
+// For storage-efficient representation, we'll use bit-packing
+// in the null bitmap (Step 2) and encoding (Phase 2).
+type BoolColumn struct {
+	data []bool
+}
+
+func NewBoolColumn() *BoolColumn {
+	return &BoolColumn{}
+}
+
+func NewBoolColumnFromSlice(data []bool) *BoolColumn {
+	cp := make([]bool, len(data))
+	copy(cp, data)
+	return &BoolColumn{data: cp}
+}
+
+func (c *BoolColumn) Type() ColumnType { return TypeBool }
+func (c *BoolColumn) Len() int         { return len(c.data) }
+
+func (c *BoolColumn) Append(v bool) {
+	c.data = append(c.data, v)
+}
+
+func (c *BoolColumn) Get(i int) bool {
+	return c.data[i]
+}
+
+func (c *BoolColumn) Values() []bool {
+	return c.data
+}
