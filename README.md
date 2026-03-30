@@ -1,6 +1,6 @@
 # Columnar DB 🏗️
 
-Building a column-oriented analytical database from scratch in Go — inspired by ClickHouse, DuckDB & SingleStore.
+Building a column-oriented analytical database from scratch in Go — inspired by ClickHouse & DuckDB.
 
 ## Why
 
