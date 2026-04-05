@@ -93,6 +93,9 @@ func (r *SingleFileReader) ReadRowGroup(index int) (*RowGroup, error) {
 
 		// The null bitmap is always the last ceil(rowCount/8) bytes.
 		bitmapSize := (rgMeta.RowCount + 7) / 8
+		if int(colMeta.Size) < bitmapSize {
+			return nil, fmt.Errorf("column %q chunk size %d too small for bitmap (%d bytes)", schema.Names[i], colMeta.Size, bitmapSize)
+		}
 		valueBytes := buf[:len(buf)-bitmapSize]
 		bitmapBytes := buf[len(buf)-bitmapSize:]
 
@@ -182,6 +185,12 @@ func (r *SingleFileReader) readFooter(footerLen uint32) error {
 		return fmt.Errorf("stat file: %w", err)
 	}
 	fileSize := fi.Size()
+
+	// Sanity-check footer length before allocating.
+	maxFooterLen := fileSize - int64(HeaderSize) - int64(TrailerSize)
+	if int64(footerLen) > maxFooterLen || int64(footerLen) < 0 {
+		return fmt.Errorf("invalid footer length %d (file size %d)", footerLen, fileSize)
+	}
 
 	// Footer starts at: fileSize - TrailerSize - footerLen
 	footerStart := fileSize - int64(TrailerSize) - int64(footerLen)
@@ -290,6 +299,9 @@ func (r *SingleFileReader) parseColumnChunkMeta(buf []byte, colType ColumnType) 
 	hasStats := buf[pos]
 	pos++
 
+	// Only 0 and 1 are defined today; treat any other value as "no stats"
+	// so that files written by a future encoder (which might use 2+ for
+	// new stat kinds) can still be opened by this reader.
 	if hasStats == 1 {
 		minVal, n, err := r.parseStatValue(buf[pos:], colType)
 		if err != nil {
@@ -444,8 +456,8 @@ func decodeStringValues(data []byte, rowCount int) (*StringColumn, error) {
 	for i := 0; i < rowCount; i++ {
 		start := offsets[i]
 		end := offsets[i+1]
-		if int(end) > len(stringData) {
-			return nil, fmt.Errorf("string offset out of range: end=%d, data_len=%d", end, len(stringData))
+		if start > end || int(end) > len(stringData) {
+			return nil, fmt.Errorf("invalid string offset range [%d, %d) for data length %d", start, end, len(stringData))
 		}
 		col.Append(string(stringData[start:end]))
 	}

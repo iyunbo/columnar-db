@@ -382,7 +382,9 @@ func TestOpenFileNotFound(t *testing.T) {
 
 func TestOpenFileBadMagic(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "badmagic.cldb")
-	os.WriteFile(path, []byte("XXXX\x01\x00"), 0o644)
+	if err := os.WriteFile(path, []byte("XXXX\x01\x00"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	_, err := OpenFile(path)
 	if err == nil {
@@ -392,14 +394,15 @@ func TestOpenFileBadMagic(t *testing.T) {
 
 func TestOpenFileBadVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "badver.cldb")
-	// Valid magic, wrong version (99).
+	// Valid magic, wrong version (99). Include trailer so the header check
+	// is the first failure.
 	data := []byte("CLDB")
-	data = append(data, 0x63, 0x00) // version 99
-	// Need trailing magic for the trailer check to reach; pad enough.
-	// Minimal: just header + trailer (no footer).
-	data = append(data, 0x00, 0x00, 0x00, 0x00) // footer length 0
-	data = append(data, []byte("CLDB")...)        // trailing magic
-	os.WriteFile(path, data, 0o644)
+	data = append(data, 0x63, 0x00)               // version 99
+	data = append(data, 0x00, 0x00, 0x00, 0x00)   // footer length 0
+	data = append(data, []byte("CLDB")...)         // trailing magic
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	_, err := OpenFile(path)
 	if err == nil {
@@ -413,7 +416,9 @@ func TestOpenFileBadTrailingMagic(t *testing.T) {
 	data := []byte("CLDB\x01\x00")
 	data = append(data, 0x00, 0x00, 0x00, 0x00) // footer length 0
 	data = append(data, []byte("XXXX")...)        // bad trailing magic
-	os.WriteFile(path, data, 0o644)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	_, err := OpenFile(path)
 	if err == nil {
