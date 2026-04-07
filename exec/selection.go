@@ -67,6 +67,23 @@ func (s *Selection) Add(i int) {
 // Reset or Add.
 func (s *Selection) Indices() []uint16 { return s.indices }
 
+// AppendUint16Unchecked appends a raw index with no bounds check. This
+// is the filter hot-path primitive: the caller has already validated
+// the index by reading it out of an input Selection, so the range check
+// Add() performs would be pure overhead per surviving row. Using this
+// from code that did not originate the index from a trusted Selection
+// is a bug.
+func (s *Selection) AppendUint16Unchecked(i uint16) {
+	s.indices = append(s.indices, i)
+}
+
+// CopyFrom replaces this selection's contents with src's. Allocation-
+// free in steady state because both backing slices were sized to
+// VectorSize at construction.
+func (s *Selection) CopyFrom(src *Selection) {
+	s.indices = append(s.indices[:0], src.indices...)
+}
+
 // Reset clears the selection for reuse without allocation. Backing
 // capacity (VectorSize) is preserved.
 func (s *Selection) Reset() { s.indices = s.indices[:0] }

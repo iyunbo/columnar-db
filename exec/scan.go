@@ -65,7 +65,7 @@ func NewScanOp(rg *storage.RowGroup, columns []string) (*ScanOp, error) {
 	return &ScanOp{
 		rg:        rg,
 		srcChunks: srcChunks,
-		batch:     &Batch{Vectors: vectors},
+		batch:     &Batch{Vectors: vectors, Sel: NewSelection()},
 		offset:    0,
 	}, nil
 }
@@ -91,6 +91,9 @@ func (s *ScanOp) Next() (*Batch, bool) {
 			panic(fmt.Sprintf("exec: ScanOp.Next: CopyFromChunk: %v", err))
 		}
 	}
+	// Every row in a freshly-scanned batch is alive until a filter
+	// narrows the selection downstream.
+	s.batch.Sel.ResetFull(n)
 	s.offset += n
 	return s.batch, true
 }
