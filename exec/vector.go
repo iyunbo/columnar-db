@@ -225,10 +225,11 @@ func (v *Vector) CopyFromChunk(chunk *storage.ColumnChunk, start, n int) error {
 	v.length = n
 
 	// Copy nulls. The source chunk's null bitmap is indexed by absolute row
-	// [start,end); the destination bitmap is indexed by [0,n). We only walk
-	// source bits that are set, so fully-non-null chunks pay nothing beyond
-	// the HasNulls short-circuit below.
-	if chunk.NullCount > 0 {
+	// [start,end); the destination bitmap is indexed by [0,n). We use
+	// HasNulls() (which short-circuits on the first non-zero byte, O(1)
+	// amortized for dense data) rather than a cached count — the chunk's
+	// bitmap is live and could have been mutated after construction.
+	if chunk.Nulls.HasNulls() {
 		for i := range n {
 			if chunk.Nulls.IsNull(start + i) {
 				v.Nulls.SetNull(i)

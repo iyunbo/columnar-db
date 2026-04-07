@@ -10,35 +10,46 @@ import (
 //
 // In a columnar database, data is stored as column chunks — each chunk
 // holds all values of one field for a group of rows. This is the building
-// block that row groups (Step 4) and file format (Step 5) are built on.
+// block that row groups and the file format are built on.
 //
 // A chunk combines:
 //   - Values: contiguous typed array (Int64, Float64, String, Bool)
 //   - Nulls:  bit-packed null bitmap
 //   - Stats:  min, max, null count (for zone maps / skip scanning later)
+//
+// Nulls is a live bitmap — the null count is NOT cached on the struct.
+// Earlier versions stored NullCount as a field set at construction,
+// which silently drifted if any caller called SetNull on the bitmap
+// afterwards (Phase 3 Step 6 benchmark write-up flagged this). Now
+// the count is computed on demand from Nulls.NullCount(), so the two
+// can never disagree.
 type ColumnChunk struct {
-	Name      string     // column name (e.g., "age", "city")
-	ColType   ColumnType // data type
-	Values    Column     // typed values (implements Column interface)
-	Nulls     *NullBitmap
-	Count     int // total number of rows
-	NullCount int // number of NULL rows
+	Name    string     // column name (e.g., "age", "city")
+	ColType ColumnType // data type
+	Values  Column     // typed values (implements Column interface)
+	Nulls   *NullBitmap
+	Count   int // total number of rows
+}
+
+// NullCount returns the number of NULL rows. Computed on every call
+// by walking the null bitmap (O(n_bytes) with popcount), so it is
+// always consistent with the current state of Nulls.
+func (c *ColumnChunk) NullCount() int {
+	return c.Nulls.NullCount()
 }
 
 // NewColumnChunk creates a chunk from a typed column and null bitmap.
-// Automatically computes count and null count.
 func NewColumnChunk(name string, values Column, nulls *NullBitmap) (*ColumnChunk, error) {
 	if values.Len() != nulls.Len() {
 		return nil, fmt.Errorf("values length (%d) != bitmap length (%d)", values.Len(), nulls.Len())
 	}
 
 	return &ColumnChunk{
-		Name:      name,
-		ColType:   values.Type(),
-		Values:    values,
-		Nulls:     nulls,
-		Count:     values.Len(),
-		NullCount: nulls.NullCount(),
+		Name:    name,
+		ColType: values.Type(),
+		Values:  values,
+		Nulls:   nulls,
+		Count:   values.Len(),
 	}, nil
 }
 
@@ -46,12 +57,11 @@ func NewColumnChunk(name string, values Column, nulls *NullBitmap) (*ColumnChunk
 func NewColumnChunkNoNulls(name string, values Column) *ColumnChunk {
 	nulls := NewNullBitmap(values.Len())
 	return &ColumnChunk{
-		Name:      name,
-		ColType:   values.Type(),
-		Values:    values,
-		Nulls:     nulls,
-		Count:     values.Len(),
-		NullCount: 0,
+		Name:    name,
+		ColType: values.Type(),
+		Values:  values,
+		Nulls:   nulls,
+		Count:   values.Len(),
 	}
 }
 
@@ -67,7 +77,7 @@ type ColumnStats struct {
 // Stats computes summary statistics for this chunk.
 func (c *ColumnChunk) Stats() ColumnStats {
 	stats := ColumnStats{
-		NullCount: c.NullCount,
+		NullCount: c.NullCount(),
 		Count:     c.Count,
 	}
 
