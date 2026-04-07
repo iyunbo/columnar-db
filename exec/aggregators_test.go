@@ -221,6 +221,84 @@ func TestInt64MinAllNull(t *testing.T) {
 	}
 }
 
+func TestInt64MinGroupedWithNulls(t *testing.T) {
+	// Exercises the null-aware grouped loop body of Int64Min, which
+	// the differential test only hits via the scalar path.
+	a := &Int64Min{}
+	a.Init(3)
+	// vals: 30, 10, NULL, 5, NULL — group 0: {30, 5} → 5;
+	//                              group 1: {10, NULL} → 10;
+	//                              group 2: {NULL} → null
+	v := makeInt64Vec(t, []int64{30, 10, 20, 5, 50}, []int{2, 4})
+	gids := []int32{0, 1, 1, 0, 2}
+	a.Update(v, fullSel(5), gids)
+	out := finalizeAll(t, a, 3)
+	if got := out.Int64s()[0]; got != 5 {
+		t.Errorf("group 0 min: got %d, want 5", got)
+	}
+	if got := out.Int64s()[1]; got != 10 {
+		t.Errorf("group 1 min: got %d, want 10", got)
+	}
+	if !out.IsNull(2) {
+		t.Errorf("group 2 (all-null) min: want null")
+	}
+}
+
+func TestInt64MaxGroupedWithNulls(t *testing.T) {
+	a := &Int64Max{}
+	a.Init(3)
+	v := makeInt64Vec(t, []int64{30, 10, 20, 5, 50}, []int{2, 4})
+	gids := []int32{0, 1, 1, 0, 2}
+	a.Update(v, fullSel(5), gids)
+	out := finalizeAll(t, a, 3)
+	if got := out.Int64s()[0]; got != 30 {
+		t.Errorf("group 0 max: got %d, want 30", got)
+	}
+	if got := out.Int64s()[1]; got != 10 {
+		t.Errorf("group 1 max: got %d, want 10", got)
+	}
+	if !out.IsNull(2) {
+		t.Errorf("group 2 (all-null) max: want null")
+	}
+}
+
+func TestInt64AvgGroupedWithNulls(t *testing.T) {
+	a := &Int64Avg{}
+	a.Init(3)
+	// group 0: {30, 5} → 17.5; group 1: {10} (NULL skipped) → 10;
+	// group 2: {} (all NULL) → null
+	v := makeInt64Vec(t, []int64{30, 10, 20, 5, 50}, []int{2, 4})
+	gids := []int32{0, 1, 1, 0, 2}
+	a.Update(v, fullSel(5), gids)
+	out := finalizeAll(t, a, 3)
+	if got := out.Float64s()[0]; got != 17.5 {
+		t.Errorf("group 0 avg: got %v, want 17.5", got)
+	}
+	if got := out.Float64s()[1]; got != 10.0 {
+		t.Errorf("group 1 avg: got %v, want 10", got)
+	}
+	if !out.IsNull(2) {
+		t.Errorf("group 2 (all-null) avg: want null")
+	}
+}
+
+func TestFloat64MinGroupedWithNulls(t *testing.T) {
+	a := &Float64Min{}
+	a.Init(2)
+	v := makeFloat64Vec(t, []float64{3.0, 1.5, 2.5, 0.5}, []int{1})
+	// vals: 3.0, NULL, 2.5, 0.5 → group 0: {3.0, 0.5} → 0.5;
+	//                            group 1: {2.5} → 2.5
+	gids := []int32{0, 1, 1, 0}
+	a.Update(v, fullSel(4), gids)
+	out := finalizeAll(t, a, 2)
+	if got := out.Float64s()[0]; got != 0.5 {
+		t.Errorf("group 0: got %v, want 0.5", got)
+	}
+	if got := out.Float64s()[1]; got != 2.5 {
+		t.Errorf("group 1: got %v, want 2.5", got)
+	}
+}
+
 func TestInt64MaxGrouped(t *testing.T) {
 	a := &Int64Max{}
 	a.Init(2)
@@ -309,6 +387,28 @@ func TestFloat64SumMinMaxAvg(t *testing.T) {
 	}
 }
 
+func TestFloat64NaNFirstValue(t *testing.T) {
+	// Edge case: NaN as the FIRST value seen by Min/Max. The
+	// `!hasValue || v < min` short-circuit stores NaN as the seed
+	// because hasValue is false. After that, every subsequent `v < NaN`
+	// returns false, so NaN sticks. Documented behavior — pin it.
+	v := makeFloat64Vec(t, []float64{math.NaN(), 1.0, 3.0}, nil)
+
+	min := &Float64Min{}
+	min.Init(1)
+	min.Update(v, fullSel(3), nil)
+	if got := finalizeAll(t, min, 1).Float64s()[0]; !math.IsNaN(got) {
+		t.Errorf("Float64Min seeded with NaN = %v, want NaN (NaN sticks once seeded)", got)
+	}
+
+	max := &Float64Max{}
+	max.Init(1)
+	max.Update(v, fullSel(3), nil)
+	if got := finalizeAll(t, max, 1).Float64s()[0]; !math.IsNaN(got) {
+		t.Errorf("Float64Max seeded with NaN = %v, want NaN", got)
+	}
+}
+
 func TestFloat64NaN(t *testing.T) {
 	// Documented behavior (per the file header comment): NaN never
 	// moves Min or Max but DOES contribute to Sum and (via count) Avg.
@@ -359,7 +459,8 @@ func TestInt64SumMultiBatch(t *testing.T) {
 
 func TestGrowPreservesState(t *testing.T) {
 	// GroupByOp grows the hash table mid-query; aggregators must
-	// preserve existing per-group state on Grow.
+	// preserve existing per-group state on Grow AND keep accumulating
+	// into old groups after Grow (not just into newly-allocated ones).
 	a := &Int64Sum{}
 	a.Init(2)
 	v := makeInt64Vec(t, []int64{10, 20}, nil)
@@ -367,14 +468,21 @@ func TestGrowPreservesState(t *testing.T) {
 
 	a.Grow(5)
 
+	// Hit new groups.
 	v2 := makeInt64Vec(t, []int64{100, 200, 300}, nil)
 	a.Update(v2, fullSel(3), []int32{2, 3, 4})
 
+	// Re-hit OLD groups after Grow — this is the case the previous
+	// test version missed. State must continue to accumulate, not
+	// just sit untouched in slots that the Grow happened to copy.
+	v3 := makeInt64Vec(t, []int64{1, 2}, nil)
+	a.Update(v3, fullSel(2), []int32{0, 1})
+
 	out := finalizeAll(t, a, 5)
-	want := []int64{10, 20, 100, 200, 300}
+	want := []int64{11, 22, 100, 200, 300}
 	for g, w := range want {
 		if got := out.Int64s()[g]; got != w {
-			t.Errorf("group %d after Grow: got %d, want %d", g, got, w)
+			t.Errorf("group %d after Grow + re-hit: got %d, want %d", g, got, w)
 		}
 	}
 }

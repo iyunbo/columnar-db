@@ -23,8 +23,16 @@ import "github.com/iyunbo/columnar-db/storage"
 //	for each batch from upstream:
 //	    a.Update(vec, sel, gids)   // accumulate into state[gids[i]]
 //	for g := 0; g < numGroups; g++ {
-//	    a.Finalize(g, outVec, g)   // write group g's result into row g of outVec
+//	    a.Finalize(g, outVec)      // append group g's result to outVec
 //	}
+//
+// **Output sizing**: callers must ensure outVec has capacity for at
+// least numGroups appends. AggregateOp/GroupByOp will size their
+// result Vector accordingly. The current Vector implementation has
+// VectorSize=1024 capacity, so a single result Vector cannot hold
+// more than 1024 groups; Step 4's GroupByOp will need to either
+// emit multiple result batches or grow Vector capacity. Filed as a
+// Step 4 design point.
 //
 // Shape rules:
 //
