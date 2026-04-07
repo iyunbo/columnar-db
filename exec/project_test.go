@@ -144,8 +144,9 @@ func TestProjectMultiBatch(t *testing.T) {
 	scan, _ := NewScanOp(rg, []string{"a", "b"})
 	proj, _ := NewProjectOp(scan, []int{0})
 
-	total := 0
 	batches := 0
+	batchStart := 0
+	total := 0
 	for {
 		b, ok := proj.Next()
 		if !ok {
@@ -156,13 +157,14 @@ func TestProjectMultiBatch(t *testing.T) {
 			t.Fatalf("NumColumns = %d", b.NumColumns())
 		}
 		ints := b.Vectors[0].Int64s()
-		for _, i := range b.Sel.Indices() {
-			if ints[i] != int64(total+int(i)) {
-				// `i` is relative to the current batch so compare
-				// against the running total offset.
+		for _, idx := range b.Sel.Indices() {
+			want := int64(batchStart) + int64(idx)
+			if ints[idx] != want {
+				t.Fatalf("batch %d row %d: got %d, want %d", batches-1, idx, ints[idx], want)
 			}
 			total++
 		}
+		batchStart += b.Len()
 	}
 	if total != n {
 		t.Errorf("total = %d, want %d", total, n)
@@ -294,6 +296,89 @@ func TestProjectZeroAllocSteadyState(t *testing.T) {
 	if allocs != 0 {
 		t.Errorf("project drain allocs/op = %v, want 0", allocs)
 	}
+}
+
+func TestProjectAllColumnsPassthrough(t *testing.T) {
+	// Identity projection — every child column in child order. Nothing
+	// should degrade vs not having a ProjectOp at all.
+	rg := makeMultiColRowGroup(t, 100)
+	scan, _ := NewScanOp(rg, []string{"a", "b", "c", "d"})
+	proj, _ := NewProjectOp(scan, []int{0, 1, 2, 3})
+
+	b, ok := proj.Next()
+	if !ok {
+		t.Fatal("expected batch")
+	}
+	if b.NumColumns() != 4 {
+		t.Errorf("NumColumns = %d, want 4", b.NumColumns())
+	}
+	wantTypes := []storage.ColumnType{
+		storage.TypeInt64, storage.TypeString, storage.TypeFloat64, storage.TypeBool,
+	}
+	for i, want := range wantTypes {
+		if b.Vectors[i].Type != want {
+			t.Errorf("col %d type = %s, want %s", i, b.Vectors[i].Type, want)
+		}
+	}
+}
+
+func TestProjectOverProjectStacking(t *testing.T) {
+	// Outer projection of an inner projection — aliasing composes.
+	// Inner picks [2, 0, 1] from [a, b, c, d]: → [c, a, b].
+	// Outer picks [1, 0] from inner: → [a, c].
+	rg := makeMultiColRowGroup(t, 50)
+	scan, _ := NewScanOp(rg, []string{"a", "b", "c", "d"})
+	inner, _ := NewProjectOp(scan, []int{2, 0, 1}) // c, a, b
+	outer, _ := NewProjectOp(inner, []int{1, 0})   // a, c
+
+	b, ok := outer.Next()
+	if !ok {
+		t.Fatal("expected batch")
+	}
+	if b.NumColumns() != 2 {
+		t.Fatalf("NumColumns = %d, want 2", b.NumColumns())
+	}
+	if b.Vectors[0].Type != storage.TypeInt64 {
+		t.Errorf("outer col 0 type = %s, want Int64", b.Vectors[0].Type)
+	}
+	if b.Vectors[1].Type != storage.TypeFloat64 {
+		t.Errorf("outer col 1 type = %s, want Float64", b.Vectors[1].Type)
+	}
+	// Data check: row 7 should have int=7, float=7.5.
+	if got := b.Vectors[0].Int64s()[7]; got != 7 {
+		t.Errorf("int row 7 = %d, want 7", got)
+	}
+	if got := b.Vectors[1].Float64s()[7]; got != 7.5 {
+		t.Errorf("float row 7 = %v, want 7.5", got)
+	}
+}
+
+func TestProjectEmptyResultViaFilter(t *testing.T) {
+	// Filter below project drops everything. Project must drain
+	// cleanly, never panic, and return (nil, false) on the first call.
+	rg := makeMultiColRowGroup(t, 1000)
+	scan, _ := NewScanOp(rg, []string{"a", "b"})
+	filter, _ := NewFilterOp(scan, 0, Int64Gt{Value: 100000}) // matches nothing
+	proj, _ := NewProjectOp(filter, []int{1})
+
+	if b, ok := proj.Next(); ok {
+		t.Errorf("expected (nil,false), got batch len %d", b.Len())
+	}
+}
+
+func TestProjectColumnOutOfRangePanics(t *testing.T) {
+	// OOB column index is deferred to Next()'s panic path (until
+	// Operator exposes a Schema accessor). Verify the contract.
+	rg := makeMultiColRowGroup(t, 10)
+	scan, _ := NewScanOp(rg, []string{"a"})      // only 1 column
+	proj, _ := NewProjectOp(scan, []int{0, 5})   // col 5 doesn't exist
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on out-of-range column index")
+		}
+	}()
+	proj.Next()
 }
 
 func TestProjectOverFilterChain(t *testing.T) {

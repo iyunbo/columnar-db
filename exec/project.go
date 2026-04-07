@@ -20,11 +20,12 @@ import "fmt"
 //	  ProjectOp: drops "age", keeps only "name"
 //
 // Push-down note: when Project sits directly above Scan, the caller
-// should push the projection into NewScanOp's column list instead of
-// stacking a ProjectOp — Scan then never decodes the dropped columns
-// at all. That's pure push-down and costs nothing. ProjectOp exists
-// for the cases where something else (a filter, a join) sits between
-// Scan and the projection.
+// should push the narrower projection into NewScanOp by passing the
+// reduced column-name list at construction time instead of stacking
+// a ProjectOp — Scan then never decodes the dropped columns at all.
+// That's pure push-down and costs nothing. ProjectOp exists for the
+// cases where something else (a filter, a join) sits between Scan
+// and the projection and needs columns the final output does not.
 type ProjectOp struct {
 	child Operator
 	cols  []int // column indices into the child's output batch
