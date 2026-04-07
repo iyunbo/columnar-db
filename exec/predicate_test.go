@@ -121,6 +121,40 @@ func TestInt64PredicatesNarrowedInputOnly(t *testing.T) {
 	}
 }
 
+func TestInt64PredicateNoMatchOnNonEmptyInput(t *testing.T) {
+	// Non-empty input selection, predicate matches nothing. Distinct
+	// from TestInt64PredicatesEmptyInput which passes an empty input.
+	v := makeInt64Vector(t, 100) // 0..99
+	in := NewFullSelection(100)
+	out := NewSelection()
+	out.Add(777) // pre-populate — must be reset
+
+	Int64Gt{Value: 1000}.Eval(v, in, out)
+	if out.Len() != 0 {
+		t.Errorf("Len = %d, want 0", out.Len())
+	}
+}
+
+func TestInt64PredicateAllNulls(t *testing.T) {
+	// Every row is null. Any predicate should drop every row.
+	v := NewVector(storage.TypeInt64)
+	for i := range 20 {
+		if err := v.AppendNull(); err != nil {
+			t.Fatal(err)
+		}
+		_ = i
+	}
+	in := NewFullSelection(20)
+	out := NewSelection()
+
+	// Ge=MinInt64 would match any non-null value. With all nulls, none
+	// should survive.
+	Int64Ge{Value: -1 << 62}.Eval(v, in, out)
+	if out.Len() != 0 {
+		t.Errorf("all-null Ge: Len = %d, want 0", out.Len())
+	}
+}
+
 func TestInt64PredicateZeroAllocEval(t *testing.T) {
 	// The filter hot path must be alloc-free. This is the primary
 	// guarantee that Step 6's benchmark target is reachable.

@@ -196,6 +196,45 @@ func TestSelectionFirstFillZeroAlloc(t *testing.T) {
 	}
 }
 
+func TestSelectionCopyFrom(t *testing.T) {
+	src := NewSelection()
+	for _, i := range []uint16{2, 5, 10, 1023} {
+		src.AppendUint16Unchecked(i)
+	}
+
+	dst := NewSelection()
+	dst.Add(999) // pre-populate — should be replaced
+	dst.CopyFrom(src)
+
+	if dst.Len() != src.Len() {
+		t.Fatalf("Len = %d, want %d", dst.Len(), src.Len())
+	}
+	for i := range src.Indices() {
+		if dst.Indices()[i] != src.Indices()[i] {
+			t.Errorf("dst[%d] = %d, want %d", i, dst.Indices()[i], src.Indices()[i])
+		}
+	}
+
+	// Mutating src afterwards must not affect dst — CopyFrom is a deep
+	// copy of the index slice, not a pointer alias.
+	src.Reset()
+	if dst.Len() != 4 {
+		t.Errorf("after src.Reset, dst.Len = %d, want 4 (dst should be independent)", dst.Len())
+	}
+}
+
+func TestSelectionCopyFromZeroAlloc(t *testing.T) {
+	src := NewFullSelection(VectorSize)
+	dst := NewFullSelection(VectorSize)
+
+	allocs := testing.AllocsPerRun(50, func() {
+		dst.CopyFrom(src)
+	})
+	if allocs != 0 {
+		t.Errorf("CopyFrom allocs/op = %v, want 0", allocs)
+	}
+}
+
 func TestSelectionIndicesAliasInternal(t *testing.T) {
 	// The doc comment promises Indices() aliases internal state and is
 	// valid until the next Reset/Add. Verify that mutating through the

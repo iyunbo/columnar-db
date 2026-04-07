@@ -264,6 +264,61 @@ func TestFilterBatchShapePreserved(t *testing.T) {
 	}
 }
 
+func TestFilterOverFilterChain(t *testing.T) {
+	// Two FilterOps stacked: outer narrows inner's output. Validates
+	// the pointer-swap lifetime under operator composition — critical
+	// for Step 5/6 pipelines.
+	rg := makeIntRowGroup(t, 5000) // 0..4999
+	scan, _ := NewScanOp(rg, []string{"x"})
+	first, err := NewFilterOp(scan, 0, Int64Ge{Value: 1000}) // keeps 1000..4999
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewFilterOp(first, 0, Int64Lt{Value: 3000}) // narrows to 1000..2999
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := []int64{}
+	for {
+		b, ok := second.Next()
+		if !ok {
+			break
+		}
+		vals := b.Vectors[0].Int64s()
+		for _, i := range b.Sel.Indices() {
+			got = append(got, vals[i])
+		}
+	}
+	if len(got) != 2000 {
+		t.Fatalf("chain survivors = %d, want 2000", len(got))
+	}
+	for i, v := range got {
+		want := int64(1000 + i)
+		if v != want {
+			t.Fatalf("chain[%d] = %d, want %d", i, v, want)
+		}
+	}
+}
+
+func TestFilterAllNullsBatch(t *testing.T) {
+	// Every row in the row group is null. A predicate that would
+	// otherwise match everything must return zero survivors across
+	// every batch.
+	n := 2000
+	nullIdx := make([]int, n)
+	for i := range n {
+		nullIdx[i] = i
+	}
+	rg := makeIntRowGroup(t, n, nullIdx...)
+	scan, _ := NewScanOp(rg, []string{"x"})
+	filter, _ := NewFilterOp(scan, 0, Int64Ge{Value: -1 << 62})
+
+	if b, ok := filter.Next(); ok {
+		t.Errorf("all-null batch survived filter: len = %d", b.Len())
+	}
+}
+
 func TestFilterZeroAllocSteadyState(t *testing.T) {
 	rg := makeIntRowGroup(t, VectorSize*4) // 4 full batches
 	scan, _ := NewScanOp(rg, []string{"x"})

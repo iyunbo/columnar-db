@@ -67,12 +67,17 @@ func (s *Selection) Add(i int) {
 // Reset or Add.
 func (s *Selection) Indices() []uint16 { return s.indices }
 
-// AppendUint16Unchecked appends a raw index with no bounds check. This
-// is the filter hot-path primitive: the caller has already validated
-// the index by reading it out of an input Selection, so the range check
-// Add() performs would be pure overhead per surviving row. Using this
-// from code that did not originate the index from a trusted Selection
-// is a bug.
+// AppendUint16Unchecked appends a raw index with no bounds check.
+//
+// PRECONDITION: the caller MUST guarantee i < VectorSize. The only
+// valid sources are indices read out of an existing trusted Selection
+// (typically via `for _, i := range otherSel.Indices()`). Passing an
+// arbitrary uint16 silently corrupts the selection — there is no panic
+// or range check to catch misuse.
+//
+// This is the filter hot-path primitive: Add()'s per-call bounds check
+// would be pure overhead for every surviving row in a tight predicate
+// loop. Callers outside that narrow use case should prefer Add().
 func (s *Selection) AppendUint16Unchecked(i uint16) {
 	s.indices = append(s.indices, i)
 }

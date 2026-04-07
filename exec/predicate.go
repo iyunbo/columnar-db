@@ -1,5 +1,15 @@
 package exec
 
+// The six Int64 predicates below are intentionally written out as
+// separate functions with duplicated null-free and null-aware loops
+// (12 near-identical loop bodies total). This is deliberate: generics
+// or helper closures would route the comparison through a function
+// value, which the current Go compiler does not reliably inline tight
+// enough to keep the loop SIMD-friendly. The zero-alloc steady-state
+// benchmark (Step 6) depends on this being a plain indexable typed
+// slice loop. If you refactor, re-run the benchmark — regressions here
+// cascade through every query.
+
 // Predicate applies a boolean test against values in a single Vector
 // and narrows an input Selection into an output Selection.
 //

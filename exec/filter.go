@@ -55,6 +55,11 @@ func NewFilterOp(child Operator, col int, pred Predicate) (*FilterOp, error) {
 // predicate has been applied. Fully-filtered batches are skipped. The
 // returned *Batch pointer aliases the child's reused batch — consume
 // or copy before the next Next().
+//
+// Termination contract: the loop below relies on child.Next() eventually
+// returning ok=false. An upstream operator that emits an infinite stream
+// of batches that all filter down to empty would spin here. ScanOp
+// satisfies the contract by construction (finite RowGroup).
 func (f *FilterOp) Next() (*Batch, bool) {
 	for {
 		b, ok := f.child.Next()
@@ -62,12 +67,22 @@ func (f *FilterOp) Next() (*Batch, bool) {
 			return nil, false
 		}
 		if f.col >= len(b.Vectors) {
+			// TODO(step5): validate col against child.Schema() in NewFilterOp
+			// once the Operator interface exposes a schema accessor. For now
+			// the mismatch is caught at first Next() call.
 			panic(fmt.Sprintf("exec: FilterOp.Next: col %d ≥ batch columns %d", f.col, len(b.Vectors)))
 		}
 
 		// Evaluate into the scratch selection; swap to make it the
 		// batch's live Sel. This is strictly faster than CopyFrom
 		// because it's O(1) pointer swap vs O(n) memmove.
+		//
+		// Lifetime note: ScanOp (the typical child) holds its selection
+		// indirectly as `s.batch.Sel`, so the swap is transparent —
+		// subsequent ResetFull/Reset calls flow through whichever
+		// *Selection is currently bound to the Batch. Both selections
+		// were constructed with capacity VectorSize, so they are fully
+		// interchangeable.
 		f.pred.Eval(b.Vectors[f.col], b.Sel, f.tempSel)
 		b.Sel, f.tempSel = f.tempSel, b.Sel
 
