@@ -120,9 +120,10 @@
 
   <h1>columnar-db — Architecture</h1>
   <p class="subtitle">
-    Static snapshot of the codebase as of Phase 3 Step 3 complete
-    (<code>main</code>, exec package has <code>Vector</code>, <code>Batch</code>, <code>ScanOp</code>,
-    <code>Selection</code>).
+    Static snapshot of the codebase as of Phase 3 Step 4 complete
+    (<code>main</code>, exec package has the <code>Operator</code> interface +
+    <code>ScanOp</code>, <code>FilterOp</code>, <code>Vector</code>, <code>Batch</code>,
+    <code>Selection</code>, <code>Predicate</code>).
   </p>
 
   <h2>Layered View</h2>
@@ -175,7 +176,8 @@
     <text x="540" y="115" text-anchor="middle" fill="#7ee787" font-weight="700">Batch</text>
     <line x1="432" y1="124" x2="648" y2="124" stroke="#30363d"/>
     <text x="432" y="148" fill="#c9d1d9">Vectors []*Vector</text>
-    <text x="432" y="170" fill="#c9d1d9">+ Len() / NumColumns()</text>
+    <text x="432" y="168" fill="#c9d1d9">Sel     *Selection</text>
+    <text x="432" y="188" fill="#c9d1d9">+ Len() / NumColumns()</text>
   </g>
 
   <!-- Vector -->
@@ -193,18 +195,45 @@
   <line x1="660" y1="145" x2="800" y2="145" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
   <text x="730" y="138" text-anchor="middle" fill="#58a6ff" font-size="12">holds N of</text>
 
-  <!-- Selection (row 2 of exec layer) -->
+  <!-- Selection (row 2 left) -->
   <g>
-    <rect x="60" y="220" width="700" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
-    <text x="410" y="245" text-anchor="middle" fill="#7ee787" font-weight="700">Selection</text>
-    <line x1="72" y1="254" x2="748" y2="254" stroke="#30363d"/>
+    <rect x="60" y="220" width="460" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
+    <text x="290" y="245" text-anchor="middle" fill="#7ee787" font-weight="700">Selection</text>
+    <line x1="72" y1="254" x2="508" y2="254" stroke="#30363d"/>
     <text x="72" y="272" fill="#c9d1d9">indices []uint16</text>
-    <text x="264" y="272" fill="#c9d1d9">+ NewFullSelection / Add / Indices / Reset / ResetFull</text>
+    <text x="72" y="285" fill="#c9d1d9" font-size="12">+ NewFullSelection / Add / Indices / Reset / CopyFrom</text>
   </g>
 
-  <!-- Selection attaches to Batch (future filter flow) -->
-  <path d="M 540 200 Q 520 210 500 220" fill="none" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrowDim)"/>
-  <text x="560" y="215" fill="#8b949e" font-size="12" font-style="italic">will pair with (Step 4+)</text>
+  <!-- FilterOp (row 2 middle) -->
+  <g>
+    <rect x="550" y="220" width="240" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
+    <text x="670" y="245" text-anchor="middle" fill="#7ee787" font-weight="700">FilterOp</text>
+    <line x1="562" y1="254" x2="778" y2="254" stroke="#30363d"/>
+    <text x="562" y="272" fill="#c9d1d9">+ Next() (*Batch, bool)</text>
+    <text x="562" y="286" fill="#c9d1d9" font-size="12">narrows Batch.Sel via Predicate</text>
+  </g>
+
+  <!-- Predicate interface (row 2 right) -->
+  <g>
+    <rect x="820" y="220" width="320" height="70" rx="6"
+          fill="#162418" stroke="#f0883e" stroke-dasharray="4 3"/>
+    <text x="980" y="245" text-anchor="middle" fill="#f0883e" font-weight="700" font-style="italic">«interface» Predicate</text>
+    <line x1="832" y1="254" x2="1128" y2="254" stroke="#30363d"/>
+    <text x="832" y="272" fill="#c9d1d9">Eval(vec, in, out *Selection)</text>
+    <text x="832" y="286" fill="#c9d1d9" font-size="12">Int64 Eq / Ne / Lt / Le / Gt / Ge</text>
+  </g>
+
+  <!-- Selection ↔ FilterOp relation (narrows) -->
+  <line x1="520" y1="255" x2="550" y2="255" stroke="#58a6ff" stroke-width="2" marker-start="url(#arrow)"/>
+  <text x="535" y="248" text-anchor="middle" fill="#58a6ff" font-size="12">narrows</text>
+
+  <!-- FilterOp → Predicate (uses) -->
+  <line x1="790" y1="255" x2="820" y2="255" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="805" y="248" text-anchor="middle" fill="#58a6ff" font-size="12">uses</text>
+
+  <!-- ScanOp → FilterOp (wraps as child) -->
+  <path d="M 180 200 Q 200 215 450 220" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
+  <text x="240" y="234" fill="#58a6ff" font-size="12">wraps via Operator iface</text>
 
   <!-- ============================== -->
   <!-- LAYER 2: STORAGE (in-memory)   -->
@@ -382,13 +411,28 @@
     </thead>
     <tbody>
       <tr>
+        <td class="pkg-exec"><code>Operator</code> (interface)</td>
+        <td>Universal pull-based contract: <code>Next() (*Batch, bool)</code> + <code>Reset()</code>. Every execution step — scan, filter, projection, aggregation — implements it, so pipelines compose by wrapping child operators (Volcano-batch model).</td>
+        <td><code>exec/operator.go</code></td>
+      </tr>
+      <tr>
         <td class="pkg-exec"><code>ScanOp</code></td>
-        <td>Source operator of the vectorized engine. Holds a <code>*RowGroup</code>, walks it in chunks of ≤1024 rows, and yields a reused <code>*Batch</code> per <code>Next()</code> call. Zero allocations after construction.</td>
+        <td>Source operator of the vectorized engine. Holds a <code>*RowGroup</code>, walks it in chunks of ≤1024 rows, and yields a reused <code>*Batch</code> per <code>Next()</code> call. Initializes each batch's <code>Sel</code> to a full selection. Zero allocations after construction.</td>
         <td><code>exec/scan.go</code></td>
       </tr>
       <tr>
+        <td class="pkg-exec"><code>FilterOp</code></td>
+        <td>Wraps a child <code>Operator</code> and narrows each batch's <code>Sel</code> using a <code>Predicate</code>. Vectors are never copied, mutated, or resized — only the selection changes (late materialization). Fully-filtered batches are silently skipped. Uses an O(1) pointer swap between a scratch selection and <code>Batch.Sel</code> instead of a copy. Zero allocations in steady state.</td>
+        <td><code>exec/filter.go</code></td>
+      </tr>
+      <tr>
+        <td class="pkg-exec"><code>Predicate</code> (interface)</td>
+        <td>Column-level boolean test: <code>Eval(vec, in, out *Selection)</code>. Concrete Int64 predicates cover <code>Eq / Ne / Lt / Le / Gt / Ge</code>. Each branches once on <code>HasNulls</code> and picks between a tight null-free loop and a null-aware loop — no interface calls in the inner loop body. Nulls never match any predicate (three-valued logic).</td>
+        <td><code>exec/predicate.go</code></td>
+      </tr>
+      <tr>
         <td class="pkg-exec"><code>Batch</code></td>
-        <td>Set of aligned <code>*Vector</code>s — one per output column. All vectors share the same length; row <em>i</em> refers to the same tuple across columns.</td>
+        <td>Set of aligned <code>*Vector</code>s (one per output column) plus a <code>*Selection</code> marking which rows are still alive. All vectors share the same raw length; row <em>i</em> refers to the same tuple across columns. <code>Batch.Len()</code> returns live row count via <code>Sel</code>; vector data stays at raw length regardless of filters.</td>
         <td><code>exec/batch.go</code></td>
       </tr>
       <tr>
@@ -398,7 +442,7 @@
       </tr>
       <tr>
         <td class="pkg-exec"><code>Selection</code></td>
-        <td>Compact <code>[]uint16</code> of row indices inside the current batch that are still "alive" after the filters applied so far. Paired with a <code>Batch</code> by the upcoming <code>FilterOp</code> (Step 4) to implement late materialization — vectors are never copied or shrunk, downstream operators iterate only live indices. Allocation-free recycle via <code>Reset()</code> / <code>ResetFull(n)</code>.</td>
+        <td>Compact <code>[]uint16</code> of row indices inside the current batch that are still alive after the filters applied so far. Embedded in every <code>Batch</code> and narrowed by <code>FilterOp</code> — the core late-materialization mechanism. Exposes <code>AppendUint16Unchecked</code> as the filter hot-path primitive (no bounds check, caller-trusted indices) plus <code>CopyFrom</code> for bulk replacement. Allocation-free recycle via <code>Reset()</code> / <code>ResetFull(n)</code>.</td>
         <td><code>exec/selection.go</code></td>
       </tr>
       <tr>
@@ -456,7 +500,8 @@
       <li><code>ReadRowGroup(i)</code>: fetch bytes for each requested column <span class="arrow">→</span> <code>LZ4</code> decompress <span class="arrow">→</span> decode via the recorded <code>Encoder</code> <span class="arrow">→</span> reconstruct <code>Column</code>s + <code>NullBitmap</code> <span class="arrow">→</span> assemble a <code>RowGroup</code>.</li>
       <li><code>NewScanOp(rg, []string{…})</code> allocates one output <code>Batch</code> of pre-sized <code>Vector</code>s (one per requested column).</li>
       <li>On each <code>Next()</code>: <code>Batch.Reset()</code> <span class="arrow">→</span> <code>Vector.CopyFromChunk(chunk, offset, n)</code> does one typed memmove per column per batch <span class="arrow">→</span> returns the reused <code>*Batch</code>.</li>
-      <li><em>(Coming in Phase 3 Steps 4–6)</em> <code>FilterOp</code>.Next <span class="arrow">→</span> apply predicates, narrow a <code>Selection</code> (the <code>[]uint16</code> type from Step 3) without touching Vector data <span class="arrow">→</span> <code>ProjectOp</code>.Next <span class="arrow">→</span> drop unused columns <span class="arrow">→</span> consumer.</li>
+      <li><code>FilterOp</code>.Next <span class="arrow">→</span> pull from child, evaluate <code>Predicate.Eval</code> against one column, swap <code>Batch.Sel</code> with the narrowed scratch selection. Vectors are never touched. Fully-filtered batches are silently skipped.</li>
+      <li><em>(Coming in Phase 3 Steps 5–6)</em> <code>ProjectOp</code>.Next <span class="arrow">→</span> drop unused columns from the output batch <span class="arrow">→</span> consumer. Then: end-to-end pipeline benchmark validating the zero-alloc / ≥5× speedup target.</li>
     </ol>
   </div>
 
