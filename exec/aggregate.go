@@ -44,8 +44,12 @@ import "github.com/iyunbo/columnar-db/storage"
 //     AggregateOp/GroupByOp can pre-allocate the result Vector at
 //     construction (no per-batch type-switch dance).
 //
-//   - Finalize writes the result for the given group into out at the
-//     given row. Zero allocation. Caller pre-sized out to numGroups.
+//   - Finalize APPENDS the result for the given group to out. Callers
+//     must call Finalize in group order (0, 1, ..., numGroups-1) so
+//     out's length grows linearly. (GroupByOp may need random-access
+//     Set semantics in Step 4 — filed as a TODO. For Step 2/3 the
+//     append contract is enough.) Finalize sets a null in out's
+//     bitmap when the group has no non-null inputs.
 //
 //   - Aggregators that operate on a specific input type (e.g.
 //     Int64Sum) check vec.Type once in Update and panic on mismatch.
@@ -60,7 +64,7 @@ type Aggregator interface {
 	Grow(numGroups int)
 	Update(vec *Vector, sel *Selection, groupIDs []int32)
 	OutputType() storage.ColumnType
-	Finalize(group int, out *Vector, row int)
+	Finalize(group int, out *Vector)
 }
 
 // AggregateOp is the scalar (non-grouping) aggregation operator. It
