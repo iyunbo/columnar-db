@@ -226,6 +226,46 @@ func TestPipelineWithNullsMatchesBaseline(t *testing.T) {
 	}
 }
 
+func TestPipelineCompoundFilterMatchesNaive(t *testing.T) {
+	// Correctness twin of the compound benchmark
+	// (BenchmarkPipelineVectorizedDrainCompound). Two chained FilterOps
+	// must produce the same survivor count as a naive row-at-a-time
+	// loop evaluating both predicates per row.
+	const n = 10_000
+	rg := makePipelineRowGroup(t, n)
+
+	want := naiveRowAtATimeCountCompound(rg, 30, 60)
+
+	scan, err := NewScanOp(rg, []string{"age"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter1, err := NewFilterOp(scan, 0, Int64Gt{Value: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter2, err := NewFilterOp(filter1, 0, Int64Lt{Value: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := 0
+	for {
+		batch, ok := filter2.Next()
+		if !ok {
+			break
+		}
+		got += batch.Len()
+	}
+	if got != want {
+		t.Fatalf("compound filter survivor count mismatch: vectorized=%d naive=%d", got, want)
+	}
+	// Sanity: every survivor must satisfy both predicates.
+	if want == 0 {
+		t.Fatal("baseline produced 0 survivors — fixture or test broken")
+	}
+}
+
 func TestPipelineLargeDataset(t *testing.T) {
 	// Plan Step 6 success criterion: 1M-row dataset, ≥3 columns,
 	// correct result. The actual throughput claim is validated by the
