@@ -21,7 +21,7 @@
 | Target (from `docs/phase3-steps.md`) | Status |
 |---|---|
 | Zero allocs in vectorized drain | **Met** ✓ |
-| Vectorized ≥ 5× faster than row-at-a-time | **Not met** — for this query shape, vectorized is 4.5–5× *slower* than the `NaiveCount` baseline. The ≥5× target is based on an unfair comparison against a row-at-a-time version that also materializes a result slice (see discussion below). |
+| Vectorized ≥ 5× faster than row-at-a-time | **Not met, but less bad than it first looks.** On the plan's *literal* comparison (both sides materialize survivors into a `[]row`), the vectorized and naive pipelines are at parity — `BenchmarkPipelineVectorized` at 8.87 ms vs `BenchmarkPipelineNaiveRowAtATime` at 8.09 ms, roughly a 1.1× slowdown. The 4.5–5× gap only appears once you *also* strip the result slice from the baseline (`NaiveCount`), which the plan never asked for. So the target was ambitious for this query shape, not catastrophically missed. |
 
 ## What actually happened
 
@@ -43,6 +43,24 @@ for i := 0; i < n; i++ {
 }
 ```
 
+### Caveat: the memmove tax doesn't explain the whole gap
+
+The numbers above are the part I can defend from first principles. But reader beware: they don't account for everything.
+
+On the push-down-to-Scan variant (the cleanest measurement, 2.67 ms), the full 8 MB `int64` memmove is only ~130 µs at M4's memory bandwidth. The gap vs `NaiveCount` (0.60 ms) is ~2.07 ms. Subtracting the 130 µs of computed memmove, **~1.94 ms of the gap is unexplained by the memmove tax alone.**
+
+Candidate causes I have not profiled and am explicitly *not* claiming:
+
+- Per-batch operator method-call overhead over ~977 `Next()` calls × a chain of `Scan → Filter`.
+- The filter's `for _, i := range in.Indices() { ... out.AppendUint16Unchecked(i) }` loop — 977 batches × 1024-ish writes into the out selection's backing slice. Naive just increments an `int`.
+- `Batch.Reset` zeroing the null bitmap each batch.
+- `Sel.ResetFull(n)` rewriting 1024 uint16s per batch (~2 MB of writes total).
+- Batch header bookkeeping.
+
+All of these are plausible individually. None have been measured in this PR. **Profiling the pushed-down drain is follow-up #4 below** — it must happen *before* the zero-copy Vector optimization, because optimizing away the 130 µs memmove only to leave the ~1.94 ms elsewhere would just produce a second negative result.
+
+I'm writing this caveat explicitly because the whole point of this document is to not repeat the mistake I already made in Step 4: writing a confident causal explanation for a performance result without the profile to back it.
+
 ## Where the vectorized model *does* win
 
 The numbers above are not an indictment of vectorized execution. They reveal an important precondition: **vectorized only wins when the vectorization cost is amortized against something the naive path can't avoid.** That includes:
@@ -60,9 +78,11 @@ For the plan's canonical query (`WHERE age > 30` over decoded int64 in memory, t
 
 ## Follow-ups identified
 
-1. **Zero-copy in-memory scan.** When `ScanOp` is reading from an already-decoded `RowGroup`, `CopyFromChunk` is pure overhead — it could alias the chunk's backing slice directly (read-only) and skip the copy entirely. This would close most of the gap on in-memory queries. Requires adding a "borrowed" mode to `Vector` so its backing slice isn't mutated by downstream operators. Non-trivial; flagged for Phase 3 polish or a dedicated performance PR.
-2. **Compound-predicate benchmark.** Add a second benchmark that stacks two predicates (`age > 30 AND age < 60`) to show the regime where vectorized starts to win on simple queries.
+1. **Zero-copy in-memory scan.** When `ScanOp` is reading from an already-decoded `RowGroup`, `CopyFromChunk` is pure overhead — it could alias the chunk's backing slice directly (read-only) and skip the copy entirely. This would close the ~130 µs of memmove on the pushed-down benchmark. Requires adding a "borrowed" mode to `Vector` so its backing slice isn't mutated by downstream operators. Non-trivial; flagged for Phase 3 polish.
+2. **Compound-predicate benchmark.** Add a benchmark that stacks two predicates (`age > 30 AND age < 60`) or uses a more expensive predicate to show the regime where vectorized starts to win. Recommended for the *next* PR, not "eventually" — without this number the claim that vectorized wins on complex predicates is itself unverified.
 3. **Read-path benchmark.** Once the full `SingleFileReader` → `ScanOp` path is exercised end-to-end (file decode dominates), repeat this benchmark. Expected: the naive path's advantage evaporates because both paths pay the decode cost and vectorized amortizes it better.
+4. **Profile the pushed-down vectorized drain (must happen first).** Identify what the ~1.94 ms of non-memmove time is. Without this, #1's zero-copy optimization might close only 130 µs of a 2 ms gap and leave the engine still slower than `NaiveCount` — that would be a second negative result and would mean we optimized the wrong thing.
+5. **`ColumnChunk.NullCount` foot-gun.** The field is set once at construction but `ColumnChunk.Nulls` is a mutable bitmap. If anyone calls `SetNull` after `NewColumnChunk`, the field goes stale and `ScanOp`'s null-copy fast path silently produces wrong results. `TestPipelineWithNullsMatchesBaseline` in this PR hit this exact bug and had to be rewritten. Make `NullCount` a method that delegates to `Nulls.Count()`, or make `Nulls` a read-only wrapper. Separate small PR.
 
 ## Success criteria revision
 

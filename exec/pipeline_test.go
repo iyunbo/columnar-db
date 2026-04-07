@@ -68,7 +68,10 @@ func naiveRowAtATimeScanFilterProject(rg *storage.RowGroup, threshold int64) []r
 	nameVals := nameChunk.Values.(*storage.StringColumn)
 	ageNulls := ageChunk.Nulls
 
-	result := make([]row, 0, rg.RowCount/4)
+	// Expected fraction for the canonical query is ~65% (uniform 0..89
+	// filtered > 30), so over-allocate to avoid slice growth on the
+	// benchmark hot path.
+	result := make([]row, 0, rg.RowCount*2/3)
 	for i := range rg.RowCount {
 		if ageNulls.IsNull(i) {
 			continue
@@ -121,7 +124,10 @@ func vectorizedScanFilterProject(t testing.TB, rg *storage.RowGroup, threshold i
 		t.Fatal(err)
 	}
 
-	result := make([]row, 0, rg.RowCount/4)
+	// Expected fraction for the canonical query is ~65% (uniform 0..89
+	// filtered > 30), so over-allocate to avoid slice growth on the
+	// benchmark hot path.
+	result := make([]row, 0, rg.RowCount*2/3)
 	for {
 		b, ok := proj.Next()
 		if !ok {

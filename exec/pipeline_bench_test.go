@@ -41,6 +41,11 @@ var (
 	benchRG     *storage.RowGroup
 )
 
+// benchRG is shared across every pipeline benchmark via sync.Once.
+// It MUST be treated as read-only. No operator in this package
+// currently mutates a RowGroup it scans, but if that ever changes
+// the fixture must be rebuilt per benchmark, not shared.
+
 // getBenchRG lazily builds the 1M-row fixture once per process. The
 // setup cost (deterministic rand + column fills) is excluded from
 // every benchmark's measurement loop via sync.Once.
@@ -127,11 +132,14 @@ func BenchmarkPipelineVectorizedDrain(b *testing.B) {
 	}
 }
 
-// BenchmarkPipelineVectorizedDrainPushedDown is the manually
-// push-pushed-down twin: Scan reads ONLY the "age" column (the one
-// the filter needs), Project is not stacked on top. This shows the
-// ceiling of what the current pipeline can do on a count-only
-// workload — directly comparable to BenchmarkPipelineNaiveCount.
+// BenchmarkPipelineVectorizedDrainPushedDown is the optimistic
+// ceiling, not the current cost: Scan reads ONLY the "age" column
+// (as if a planner had pushed the projection into Scan), no
+// ProjectOp is stacked on top. Directly comparable to
+// BenchmarkPipelineNaiveCount and reveals the irreducible per-batch
+// overhead of the vectorized model on a single-column count query.
+// The real pipeline does not yet push projection into Scan
+// automatically — see docs/phase3-benchmark-results.md follow-up #1.
 func BenchmarkPipelineVectorizedDrainPushedDown(b *testing.B) {
 	rg := getBenchRG(b)
 
