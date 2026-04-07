@@ -162,11 +162,37 @@ func TestSelectionZeroAllocReuse(t *testing.T) {
 func TestSelectionResetFullZeroAlloc(t *testing.T) {
 	s := NewFullSelection(VectorSize)
 
+	// Exercise ResetFull across varying sizes — each must be alloc-free.
+	for _, n := range []int{0, 1, 100, 512, 1023, VectorSize} {
+		allocs := testing.AllocsPerRun(50, func() {
+			s.ResetFull(n)
+		})
+		if allocs != 0 {
+			t.Errorf("ResetFull(%d) allocs/op = %v, want 0", n, allocs)
+		}
+	}
+}
+
+func TestSelectionFirstFillZeroAlloc(t *testing.T) {
+	// A fresh NewSelection is cap=VectorSize, so the first fill up to
+	// VectorSize must also be alloc-free (not only post-Reset refills).
+	//
+	// Note: AllocsPerRun makes multiple calls; use a fresh Selection in
+	// each closure invocation to measure the first-fill path specifically,
+	// and hold the result to make sure the compiler doesn't elide it.
+	var sink *Selection
 	allocs := testing.AllocsPerRun(50, func() {
-		s.ResetFull(VectorSize)
+		s := NewSelection()
+		for i := 0; i < VectorSize; i++ {
+			s.Add(i)
+		}
+		sink = s
 	})
-	if allocs != 0 {
-		t.Errorf("ResetFull allocs/op = %v, want 0", allocs)
+	_ = sink
+	// 2 allocs expected: the Selection struct on the heap + the backing
+	// []uint16 slice. The fill loop on top must add nothing beyond those.
+	if allocs > 2 {
+		t.Errorf("NewSelection + full Add loop allocs/op = %v, want ≤ 2", allocs)
 	}
 }
 

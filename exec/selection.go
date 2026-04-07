@@ -41,13 +41,8 @@ func NewSelection() *Selection {
 // to calling NewSelection and Add(0..n-1) but done as one slice fill.
 // Panics if n > VectorSize or n < 0.
 func NewFullSelection(n int) *Selection {
-	if n < 0 || n > VectorSize {
-		panic(fmt.Sprintf("exec: NewFullSelection n=%d out of range [0,%d]", n, VectorSize))
-	}
-	s := &Selection{indices: make([]uint16, n, VectorSize)}
-	for i := range n {
-		s.indices[i] = uint16(i)
-	}
+	s := NewSelection()
+	s.ResetFull(n) // single source of truth for the fill loop
 	return s
 }
 
