@@ -32,7 +32,13 @@ Reproduction:
 go test -bench='PipelineNaiveCount|PipelineVectorizedDrain' \
         -run=NONE -benchtime=2s ./exec/
 ```
-Single run, Apple M4. See "Methodology & caveats" in the compound doc.
+**Single run per benchmark**, no `-count=N`, no `benchstat`, no
+variance bars. The deltas below (e.g. "naive improved by 1.06 ms")
+are arithmetic on point estimates, not statistical claims. They are
+large enough relative to typical M4 noise (~5-10%) that the
+*direction* of the conclusion is robust, but the specific 1.06 ms vs
+0.48 ms split should not be treated as load-bearing. See also
+"Methodology & caveats" in the compound doc.
 
 ## What I expected vs what happened
 
@@ -47,7 +53,16 @@ win.
 than its *int64* compound query (4.07 ms), not slower. The
 hypothesis was the wrong sign.
 
-The mechanism, once again, is branch prediction:
+The proposed mechanism, once again, is branch prediction —
+**inherited as a hypothesis from `docs/phase3-compound-benchmark.md`,
+not independently measured on this run**. The PR #34 write-up backed
+the branch-prediction story by disassembling the naive functions and
+finding `CSINC` (single predicate, branchless) vs `BGE`/`BLE` (compound,
+real branches), which is verified evidence of the *control-flow shape*.
+What is *not* yet verified is the actual misprediction rate from
+hardware counters — that experiment is still pending (see
+"Recommended close-out experiment" below). Treating the story as
+hypothesis until measured:
 
 - `30 < age < 60` over uniform ages 0..89 → second branch (`a < 60`
   conditional on `a > 30`) is true for ~30/59 ≈ 51 % of inputs.
@@ -56,12 +71,19 @@ The mechanism, once again, is branch prediction:
   ~1/5 = 20 % of inputs, with the overwhelmingly common answer being
   "no". **Highly predictable, near-zero misprediction cost.**
 
-Plus, the actual string compare turns out to be cheap on this
-fixture: the city pool is `{"Paris", "Lyon", "Kunming", "Shanghai",
-"Beijing"}` and only one entry shares its first byte with `"Paris"`.
-`memcmp` rejects after 1 byte for ~80 % of inputs. So the "10× more
-expensive per row" assumption was also wrong — string equality is
-~1× int64 equality on this distribution.
+Plus, the actual string compare is cheap on this fixture for a
+different reason than I initially wrote (caught in review): Go's
+`string ==` checks length **first**. The city pool is
+`{"Paris"=5, "Lyon"=4, "Kunming"=7, "Shanghai"=8, "Beijing"=7}`,
+and four of the five entries have a length different from `"Paris"`.
+So 4/5 ≈ **80 % of comparisons reject on the length check alone and
+never reach `memcmp`**. (My first draft wrote "rejects after 1 byte
+of memcmp" — that's the wrong mechanism. The arithmetic is the same,
+the mechanism isn't.) The "10× more expensive per row" assumption
+was wrong: on this specific city pool, string equality is roughly
+1× int64 equality. A different city pool with more equal-length
+entries (`"Paris"`, `"Tokyo"`, `"Lyons"`, `"Milan"`, `"Osaka"`)
+would actually exercise `memcmp` and might shift the result.
 
 Vectorized did improve, but less than naive:
 
@@ -163,6 +185,36 @@ Concrete recommendation:
   is real per the published literature. Reverting to row-at-a-time
   would forfeit the upside without saving the engineering already
   done.
+
+## Recommended close-out experiment
+
+The branch-prediction mechanism has been the explanatory backbone of
+PR #34 and this PR, but it has only been verified at the *assembly*
+level (CSINC vs BGE/BLE control flow shapes). The actual hardware
+branch-miss rate has not been measured. Before committing the Phase 4
+design rationale to this story, run the four naive count benchmarks
+under a hardware counter:
+
+- Linux: `perf stat -e branches,branch-misses ./exec.test -test.bench=...`
+- macOS: Instruments → "Counters" template → `BR_MISP_RETIRED.ALL_BRANCHES`
+  on Apple Silicon (or `xctrace record --template "Counters"`).
+
+Predicted result if the story is right:
+- `NaiveCount` (1 int pred, CSINC): branch-miss rate near 0 % (no
+  data-dependent branch on the predicate at all)
+- `NaiveCountCompound` (2 int preds, BGE/BLE on 51 % branch):
+  ~25-50 % miss rate on the predicate branches
+- `NaiveCountStringCompound` (1 int + 1 string, 20 % branch):
+  miss rate close to `NaiveCount` levels
+- `NaiveCountTriple` (3 preds, third one 97 % predictable): same as
+  Compound (the third branch adds nothing to the miss rate)
+
+If the actual numbers match, the three Phase 3 negative results are
+finally backed by a measurement, not a hypothesis chain. If they
+don't, the diagnosis was wrong all along and Phase 4's design needs
+a different rationale. **30 minutes of work, replaces a chain of
+"sounds plausible" with one number.** Filed as the only Phase 3
+follow-up with a clear go/no-go signal for Phase 4.
 
 ## Honest summary
 
