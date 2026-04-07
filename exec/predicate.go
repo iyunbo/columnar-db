@@ -2,13 +2,33 @@ package exec
 
 // The six Int64 predicates below are intentionally written out as
 // separate functions with duplicated null-free and null-aware loops
-// (12 near-identical loop bodies total). This is deliberate: generics
-// or helper closures would route the comparison through a function
-// value, which the current Go compiler does not reliably inline tight
-// enough to keep the loop SIMD-friendly. The zero-alloc steady-state
-// benchmark (Step 6) depends on this being a plain indexable typed
-// slice loop. If you refactor, re-run the benchmark — regressions here
-// cascade through every query.
+// (12 near-identical loop bodies total). The decision is backed by
+// the benchmarks in predicate_bench_test.go — measured on Apple M4,
+// Go 1.26, 1024-row vector:
+//
+//	                              ns/op (null-free)  ns/op (null-aware)
+//	HandRolled (this file)        1058               2377
+//	FuncValue  (fn param)         2549               2114
+//	Generic    (method constraint) 2543               2148
+//
+// In the null-free hot path the inline comparison is ~2.4× faster
+// than either abstraction: the Go compiler does not inline a func
+// value or a generic method call through the tight loop body, and
+// the per-row call overhead dominates because the body is a single
+// int64 compare + slice append.
+//
+// The null-aware path is effectively a wash (within ±12%) — the
+// bitmap lookup dominates the loop, absorbing the call overhead.
+// Writing those null-aware loops generically would be fine on its
+// own; we keep the hand-rolled shape only because it lets us share
+// the branch-on-HasNulls fast-path dispatch with the null-free case.
+//
+// All three shapes are zero-allocation — the choice is purely ns/op
+// for the null-free hot path.
+//
+// If you refactor, re-run: go test ./exec -bench=Predicate -benchmem
+// -run=^$ and make sure null-free hand-rolled is not the only entry
+// near ~1 µs/op.
 
 // Predicate applies a boolean test against values in a single Vector
 // and narrows an input Selection into an output Selection.
