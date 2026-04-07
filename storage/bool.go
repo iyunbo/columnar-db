@@ -13,6 +13,18 @@ func NewBoolColumn() *BoolColumn {
 	return &BoolColumn{}
 }
 
+// NewBoolColumnSized creates an empty column with backing storage
+// pre-allocated to the given capacity.
+func NewBoolColumnSized(capacity int) *BoolColumn {
+	return &BoolColumn{data: make([]bool, 0, capacity)}
+}
+
+// Reset truncates the column to zero length while retaining the backing
+// array for reuse.
+func (c *BoolColumn) Reset() {
+	c.data = c.data[:0]
+}
+
 func NewBoolColumnFromSlice(data []bool) *BoolColumn {
 	cp := make([]bool, len(data))
 	copy(cp, data)

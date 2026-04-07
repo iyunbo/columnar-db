@@ -36,6 +36,15 @@ func (b *NullBitmap) SetNull(i int) {
 	b.data[byteIdx] |= 1 << bitIdx
 }
 
+// Reset zeroes the bitmap in place, marking all tracked rows as NOT NULL.
+// Retains the underlying byte slice for reuse — the allocation-free path
+// for operators that recycle bitmaps across batches.
+func (b *NullBitmap) Reset() {
+	for i := range b.data {
+		b.data[i] = 0
+	}
+}
+
 // ClearNull marks row i as NOT NULL.
 func (b *NullBitmap) ClearNull(i int) {
 	byteIdx := i / 8
