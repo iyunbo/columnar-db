@@ -27,8 +27,12 @@ type ColumnChunk struct {
 	Name    string     // column name (e.g., "age", "city")
 	ColType ColumnType // data type
 	Values  Column     // typed values (implements Column interface)
-	Nulls   *NullBitmap
-	Count   int // total number of rows
+	// Nulls must remain length-aligned with Values. Callers may
+	// SetNull/ClearNull bits in place, but reassigning the pointer
+	// (or replacing the bitmap with one of a different length) will
+	// break NewColumnChunk's invariant silently.
+	Nulls *NullBitmap
+	Count int // total number of rows
 }
 
 // NullCount returns the number of NULL rows. Computed on every call

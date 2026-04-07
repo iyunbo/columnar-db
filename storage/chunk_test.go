@@ -119,6 +119,13 @@ func TestColumnChunkNullCountTracksBitmapMutation(t *testing.T) {
 	if chunk.Stats().NullCount != 2 {
 		t.Errorf("Stats().NullCount = %d, want 2", chunk.Stats().NullCount)
 	}
+
+	// ClearNull also round-trips — the count tracks decreases, not
+	// just monotonic increases.
+	chunk.Nulls.ClearNull(1)
+	if chunk.NullCount() != 1 {
+		t.Errorf("after ClearNull: NullCount = %d, want 1", chunk.NullCount())
+	}
 }
 
 func TestColumnChunkLengthMismatch(t *testing.T) {
