@@ -62,6 +62,13 @@ func growBool(s []bool, n int) []bool {
 	return g
 }
 
+// zero* helpers wipe a slice in place. The Go compiler recognizes
+// `for i := range s { s[i] = 0 }` and lowers it to a memclr — zero
+// allocation, much faster than make+copy.
+func zeroInt64(s []int64)     { clear(s) }
+func zeroFloat64(s []float64) { clear(s) }
+func zeroBool(s []bool)       { clear(s) }
+
 // =====================================================================
 // CountStar — counts selected rows. Ignores vec entirely (does not
 // look at vec.Nulls), matching standard SQL COUNT(*) semantics: a row
@@ -75,6 +82,7 @@ type CountStar struct {
 
 func (c *CountStar) Init(numGroups int) { c.counts = make([]int64, numGroups) }
 func (c *CountStar) Grow(numGroups int) { c.counts = growInt64(c.counts, numGroups) }
+func (c *CountStar) Reset()             { zeroInt64(c.counts) }
 
 func (c *CountStar) Update(vec *Vector, sel *Selection, groupIDs []int32) {
 	if groupIDs == nil {
@@ -107,6 +115,10 @@ func (a *Int64Sum) Init(numGroups int) {
 func (a *Int64Sum) Grow(numGroups int) {
 	a.sums = growInt64(a.sums, numGroups)
 	a.hasValue = growBool(a.hasValue, numGroups)
+}
+func (a *Int64Sum) Reset() {
+	zeroInt64(a.sums)
+	zeroBool(a.hasValue)
 }
 
 func (a *Int64Sum) Update(vec *Vector, sel *Selection, groupIDs []int32) {
@@ -182,6 +194,10 @@ func (a *Int64Min) Grow(numGroups int) {
 	a.mins = growInt64(a.mins, numGroups)
 	a.hasValue = growBool(a.hasValue, numGroups)
 }
+func (a *Int64Min) Reset() {
+	zeroInt64(a.mins)
+	zeroBool(a.hasValue)
+}
 
 func (a *Int64Min) Update(vec *Vector, sel *Selection, groupIDs []int32) {
 	vals := vec.Int64s()
@@ -256,6 +272,10 @@ func (a *Int64Max) Init(numGroups int) {
 func (a *Int64Max) Grow(numGroups int) {
 	a.maxs = growInt64(a.maxs, numGroups)
 	a.hasValue = growBool(a.hasValue, numGroups)
+}
+func (a *Int64Max) Reset() {
+	zeroInt64(a.maxs)
+	zeroBool(a.hasValue)
 }
 
 func (a *Int64Max) Update(vec *Vector, sel *Selection, groupIDs []int32) {
@@ -337,6 +357,10 @@ func (a *Int64Avg) Grow(numGroups int) {
 	a.sums = growInt64(a.sums, numGroups)
 	a.counts = growInt64(a.counts, numGroups)
 }
+func (a *Int64Avg) Reset() {
+	zeroInt64(a.sums)
+	zeroInt64(a.counts)
+}
 
 func (a *Int64Avg) Update(vec *Vector, sel *Selection, groupIDs []int32) {
 	vals := vec.Int64s()
@@ -408,6 +432,10 @@ func (a *Float64Sum) Grow(numGroups int) {
 	a.sums = growFloat64(a.sums, numGroups)
 	a.hasValue = growBool(a.hasValue, numGroups)
 }
+func (a *Float64Sum) Reset() {
+	zeroFloat64(a.sums)
+	zeroBool(a.hasValue)
+}
 
 func (a *Float64Sum) Update(vec *Vector, sel *Selection, groupIDs []int32) {
 	vals := vec.Float64s()
@@ -475,6 +503,10 @@ func (a *Float64Min) Init(numGroups int) {
 func (a *Float64Min) Grow(numGroups int) {
 	a.mins = growFloat64(a.mins, numGroups)
 	a.hasValue = growBool(a.hasValue, numGroups)
+}
+func (a *Float64Min) Reset() {
+	zeroFloat64(a.mins)
+	zeroBool(a.hasValue)
 }
 
 func (a *Float64Min) Update(vec *Vector, sel *Selection, groupIDs []int32) {
@@ -551,6 +583,10 @@ func (a *Float64Max) Grow(numGroups int) {
 	a.maxs = growFloat64(a.maxs, numGroups)
 	a.hasValue = growBool(a.hasValue, numGroups)
 }
+func (a *Float64Max) Reset() {
+	zeroFloat64(a.maxs)
+	zeroBool(a.hasValue)
+}
 
 func (a *Float64Max) Update(vec *Vector, sel *Selection, groupIDs []int32) {
 	vals := vec.Float64s()
@@ -625,6 +661,10 @@ func (a *Float64Avg) Init(numGroups int) {
 func (a *Float64Avg) Grow(numGroups int) {
 	a.sums = growFloat64(a.sums, numGroups)
 	a.counts = growInt64(a.counts, numGroups)
+}
+func (a *Float64Avg) Reset() {
+	zeroFloat64(a.sums)
+	zeroInt64(a.counts)
 }
 
 func (a *Float64Avg) Update(vec *Vector, sel *Selection, groupIDs []int32) {

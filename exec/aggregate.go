@@ -74,6 +74,12 @@ import (
 type Aggregator interface {
 	Init(numGroups int)
 	Grow(numGroups int)
+	// Reset zeroes per-group state in place WITHOUT reallocating.
+	// Used by AggregateOp.Reset between query iterations to avoid
+	// allocating per-iteration on the b.Loop hot path of Step 6's
+	// benchmark. Implementations must keep numGroups capacity intact
+	// (do not nil out the state slices).
+	Reset()
 	Update(vec *Vector, sel *Selection, groupIDs []int32)
 	OutputType() storage.ColumnType
 	Finalize(group int, out *Vector)
@@ -132,11 +138,20 @@ type AggregateOp struct {
 }
 
 // NewAggregateOp builds a scalar aggregation operator over child.
-// At least one spec is required.
+// At least one spec is required. Each Aggregator instance may be
+// referenced by at most one spec — duplicate pointers are rejected
+// because each spec writes to its own output Vector and Init/Reset
+// would clobber each other's state.
+//
+// TODO: the CountStar-takes-ColIndex-it-ignores API smell. Cleanest
+// fix is a sentinel ColIndex of -1 plus an `agg.NeedsInput() bool`
+// optional interface, but that requires flipping the negative-index
+// validation. Filed as a Step 5 / planning cleanup.
 func NewAggregateOp(child Operator, specs []AggregateSpec) (*AggregateOp, error) {
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("exec: AggregateOp requires at least one aggregator spec")
 	}
+	seen := make(map[Aggregator]struct{}, len(specs))
 	out := &Batch{
 		Vectors: make([]*Vector, len(specs)),
 		Sel:     NewSelection(),
@@ -148,6 +163,10 @@ func NewAggregateOp(child Operator, specs []AggregateSpec) (*AggregateOp, error)
 		if s.ColIndex < 0 {
 			return nil, fmt.Errorf("exec: AggregateSpec[%d] (%q) has negative ColIndex %d", i, s.Name, s.ColIndex)
 		}
+		if _, dup := seen[s.Agg]; dup {
+			return nil, fmt.Errorf("exec: AggregateSpec[%d] (%q) reuses an Aggregator instance already used by an earlier spec; each spec needs its own Aggregator", i, s.Name)
+		}
+		seen[s.Agg] = struct{}{}
 		out.Vectors[i] = NewVector(s.Agg.OutputType())
 		s.Agg.Init(1)
 	}
@@ -189,16 +208,16 @@ func (a *AggregateOp) Next() (*Batch, bool) {
 	return a.out, true
 }
 
-// Reset rewinds the operator: child is reset, output batch is
-// cleared, and every aggregator is re-Init'd to zero its state.
-// Re-Init allocates a fresh state slice (small — 1 group for scalar
-// aggregation). This per-query overhead is acceptable; the
-// steady-state contract is per-batch, not per-query.
+// Reset rewinds the operator. Zero allocation: aggregators zero
+// their per-group state in place via Aggregator.Reset (not Init,
+// which would reallocate the state slices). The output Batch is
+// also Reset in place. This matters for Step 6's b.Loop benchmark
+// where AggregateOp.Reset runs once per iteration.
 func (a *AggregateOp) Reset() {
 	a.child.Reset()
 	a.out.Reset()
 	for _, s := range a.specs {
-		s.Agg.Init(1)
+		s.Agg.Reset()
 	}
 	a.done = false
 }

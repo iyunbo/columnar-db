@@ -297,4 +297,62 @@ func TestNewAggregateOpValidation(t *testing.T) {
 	if _, err := NewAggregateOp(scan, []AggregateSpec{{Name: "x", ColIndex: -1, Agg: &CountStar{}}}); err == nil {
 		t.Error("negative ColIndex: want error")
 	}
+	// Duplicate Aggregator pointer across specs is rejected: each
+	// spec writes to its own output Vector, so reusing one
+	// Aggregator instance would silently double-count and emit a
+	// wrong arithmetic answer with no crash. Reviewer-flagged
+	// footgun.
+	dup := &Int64Sum{}
+	if _, err := NewAggregateOp(scan, []AggregateSpec{
+		{Name: "a", ColIndex: 0, Agg: dup},
+		{Name: "b", ColIndex: 0, Agg: dup},
+	}); err == nil {
+		t.Error("duplicate Aggregator pointer: want error")
+	}
+}
+
+func TestAggregateOpResetIsZeroAlloc(t *testing.T) {
+	// Reset must zero per-group state in place — not via Init's
+	// make+copy. This matters for Step 6's b.Loop benchmark, which
+	// runs Reset once per iteration and would otherwise pay
+	// (numAggregators × 2 small allocs) per iteration that the
+	// naive baseline does not.
+	const n = 1000
+	rg := makeAggRowGroup(t, n)
+	scan, err := NewScanOp(rg, []string{"age", "price"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := NewAggregateOp(scan, []AggregateSpec{
+		{Name: "n", ColIndex: 0, Agg: &CountStar{}},
+		{Name: "sum_age", ColIndex: 0, Agg: &Int64Sum{}},
+		{Name: "min_age", ColIndex: 0, Agg: &Int64Min{}},
+		{Name: "max_age", ColIndex: 0, Agg: &Int64Max{}},
+		{Name: "avg_age", ColIndex: 0, Agg: &Int64Avg{}},
+		{Name: "sum_price", ColIndex: 1, Agg: &Float64Sum{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Drain once to warm everything up.
+	drain1Row(t, op)
+
+	allocs := testing.AllocsPerRun(50, func() {
+		op.Reset()
+		// Drain again into oblivion.
+		for {
+			b, ok := op.Next()
+			if !ok {
+				break
+			}
+			_ = b
+		}
+	})
+	// ScanOp.Reset / FilterOp.Reset / etc. are also in the path;
+	// the contract is "no aggregator-related allocations". Empirically
+	// the whole drain+Reset path is 0 here. Allow up to 1 to absorb
+	// any harmless harness alloc, but flag anything bigger.
+	if allocs > 1 {
+		t.Errorf("AggregateOp Reset+drain allocs/op = %v, want ≤ 1", allocs)
+	}
 }
