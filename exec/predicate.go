@@ -193,3 +193,37 @@ func (p Int64Ge) Eval(vec *Vector, in, out *Selection) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------
+// String predicates
+// ---------------------------------------------------------------------
+
+// StringEq matches rows where the column value equals Value (and is not null).
+//
+// Why a string predicate matters for benchmarks: int64 compares are
+// the worst possible adversary for the vectorized engine, because Go's
+// scalar code is already a single CMP+CSINC. String equality is much
+// more expensive per row (length compare, then memcmp on the bytes),
+// so the relative cost of selection-vector materialization shrinks.
+// See docs/phase3-string-predicate-benchmark.md.
+type StringEq struct{ Value string }
+
+// Eval implements Predicate.
+func (p StringEq) Eval(vec *Vector, in, out *Selection) {
+	vals := vec.Strings()
+	nulls := vec.Nulls
+	out.Reset()
+	if !nulls.HasNulls() {
+		for _, i := range in.Indices() {
+			if vals[i] == p.Value {
+				out.AppendUint16Unchecked(i)
+			}
+		}
+		return
+	}
+	for _, i := range in.Indices() {
+		if !nulls.IsNull(int(i)) && vals[i] == p.Value {
+			out.AppendUint16Unchecked(i)
+		}
+	}
+}
