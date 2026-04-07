@@ -67,6 +67,28 @@ func (s *Selection) Add(i int) {
 // Reset or Add.
 func (s *Selection) Indices() []uint16 { return s.indices }
 
+// AppendUint16Unchecked appends a raw index with no bounds check.
+//
+// PRECONDITION: the caller MUST guarantee i < VectorSize. The only
+// valid sources are indices read out of an existing trusted Selection
+// (typically via `for _, i := range otherSel.Indices()`). Passing an
+// arbitrary uint16 silently corrupts the selection — there is no panic
+// or range check to catch misuse.
+//
+// This is the filter hot-path primitive: Add()'s per-call bounds check
+// would be pure overhead for every surviving row in a tight predicate
+// loop. Callers outside that narrow use case should prefer Add().
+func (s *Selection) AppendUint16Unchecked(i uint16) {
+	s.indices = append(s.indices, i)
+}
+
+// CopyFrom replaces this selection's contents with src's. Allocation-
+// free in steady state because both backing slices were sized to
+// VectorSize at construction.
+func (s *Selection) CopyFrom(src *Selection) {
+	s.indices = append(s.indices[:0], src.indices...)
+}
+
 // Reset clears the selection for reuse without allocation. Backing
 // capacity (VectorSize) is preserved.
 func (s *Selection) Reset() { s.indices = s.indices[:0] }
