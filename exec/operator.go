@@ -25,4 +25,5 @@ var (
 	_ Operator = (*ScanOp)(nil)
 	_ Operator = (*FilterOp)(nil)
 	_ Operator = (*ProjectOp)(nil)
+	_ Operator = (*AggregateOp)(nil)
 )

@@ -1,6 +1,10 @@
 package exec
 
-import "github.com/iyunbo/columnar-db/storage"
+import (
+	"fmt"
+
+	"github.com/iyunbo/columnar-db/storage"
+)
 
 // Aggregator is the contract every aggregate function (COUNT, SUM,
 // AVG, MIN, MAX, ...) implements. The shape is **columnar per-group
@@ -70,9 +74,31 @@ import "github.com/iyunbo/columnar-db/storage"
 type Aggregator interface {
 	Init(numGroups int)
 	Grow(numGroups int)
+	// Reset zeroes per-group state in place WITHOUT reallocating.
+	// Used by AggregateOp.Reset between query iterations to avoid
+	// allocating per-iteration on the b.Loop hot path of Step 6's
+	// benchmark. Implementations must keep numGroups capacity intact
+	// (do not nil out the state slices).
+	Reset()
 	Update(vec *Vector, sel *Selection, groupIDs []int32)
 	OutputType() storage.ColumnType
 	Finalize(group int, out *Vector)
+}
+
+// AggregateSpec describes one aggregator instance: which input column
+// it consumes, the aggregator implementation, and the output column
+// name (informational — Batch does not yet carry names; the name lives
+// here for self-documentation and for future use by SQL planning in
+// Phase 5).
+//
+// CountStar ignores the input column entirely (it counts selected
+// rows from sel.Len()), so for CountStar specs the ColIndex must
+// still be a valid index in the child's batch but can be any column.
+// Convention: pass 0.
+type AggregateSpec struct {
+	Name     string // result column name
+	ColIndex int    // input column index in child batches
+	Agg      Aggregator
 }
 
 // AggregateOp is the scalar (non-grouping) aggregation operator. It
@@ -86,24 +112,112 @@ type Aggregator interface {
 //
 //	Scan → Filter → AggregateOp → consumer
 //
-// Phase 4 Step 1: stub only — fields and constructor signature exist
-// so dependent code (the architecture diagram, the Step 2 PRs) can
-// reference the type, but Next/Reset and constructor are not
-// implemented yet.
+// Lifecycle:
 //
-// The implementation lands in Step 3.
+//	op, _ := NewAggregateOp(child, []AggregateSpec{...})
+//	for {
+//	    b, ok := op.Next()
+//	    if !ok { break }
+//	    // b is a 1-row batch with one Vector per spec.
+//	    // For multiple iterations, op.Reset() between drains.
+//	}
 //
-// TODO(Step 3): the output schema (column names + Vector types)
-// must be known at construction so `out *Batch` can be allocated
-// once. Likely shape: NewAggregateOp(child, []namedAggregator) with
-// each aggregator carrying its OutputType().
+// Reset semantics: each aggregator is re-Init'd (which allocates a
+// fresh per-group state slice). This is acceptable per-query overhead;
+// the steady-state hot path (Update inside Next's drain loop) is
+// where the zero-alloc contract matters.
 type AggregateOp struct {
 	child Operator
-	aggs  []Aggregator
+	specs []AggregateSpec
 	// out is the single-row result Batch, allocated once at
-	// construction so steady-state Next() does not allocate.
+	// construction so the result emission step does not allocate.
 	out *Batch
 	// done is true after the first Next() returns the result;
 	// subsequent calls return (nil, false) until Reset.
 	done bool
+}
+
+// NewAggregateOp builds a scalar aggregation operator over child.
+// At least one spec is required. Each Aggregator instance may be
+// referenced by at most one spec — duplicate pointers are rejected
+// because each spec writes to its own output Vector and Init/Reset
+// would clobber each other's state.
+//
+// TODO: the CountStar-takes-ColIndex-it-ignores API smell. Cleanest
+// fix is a sentinel ColIndex of -1 plus an `agg.NeedsInput() bool`
+// optional interface, but that requires flipping the negative-index
+// validation. Filed as a Step 5 / planning cleanup.
+func NewAggregateOp(child Operator, specs []AggregateSpec) (*AggregateOp, error) {
+	if len(specs) == 0 {
+		return nil, fmt.Errorf("exec: AggregateOp requires at least one aggregator spec")
+	}
+	seen := make(map[Aggregator]struct{}, len(specs))
+	out := &Batch{
+		Vectors: make([]*Vector, len(specs)),
+		Sel:     NewSelection(),
+	}
+	for i, s := range specs {
+		if s.Agg == nil {
+			return nil, fmt.Errorf("exec: AggregateSpec[%d] (%q) has nil Aggregator", i, s.Name)
+		}
+		if s.ColIndex < 0 {
+			return nil, fmt.Errorf("exec: AggregateSpec[%d] (%q) has negative ColIndex %d", i, s.Name, s.ColIndex)
+		}
+		if _, dup := seen[s.Agg]; dup {
+			return nil, fmt.Errorf("exec: AggregateSpec[%d] (%q) reuses an Aggregator instance already used by an earlier spec; each spec needs its own Aggregator", i, s.Name)
+		}
+		seen[s.Agg] = struct{}{}
+		out.Vectors[i] = NewVector(s.Agg.OutputType())
+		s.Agg.Init(1)
+	}
+	return &AggregateOp{
+		child: child,
+		specs: specs,
+		out:   out,
+	}, nil
+}
+
+// Next drains all batches from the child, updating every aggregator
+// with each batch's selected rows, then emits a single one-row Batch
+// of finalized results. Subsequent calls return (nil, false) until
+// Reset.
+func (a *AggregateOp) Next() (*Batch, bool) {
+	if a.done {
+		return nil, false
+	}
+	for {
+		b, ok := a.child.Next()
+		if !ok {
+			break
+		}
+		for _, s := range a.specs {
+			vec := b.Vectors[s.ColIndex]
+			s.Agg.Update(vec, b.Sel, nil)
+		}
+	}
+	// Finalize each aggregator into its result vector. The output
+	// vectors were either freshly allocated by NewAggregateOp or
+	// freshly Reset; both leave them empty, so a single AppendInt64/
+	// AppendFloat64/AppendNull from Finalize lands at row 0.
+	for i, s := range a.specs {
+		s.Agg.Finalize(0, a.out.Vectors[i])
+	}
+	a.out.Sel.Reset()
+	a.out.Sel.Add(0)
+	a.done = true
+	return a.out, true
+}
+
+// Reset rewinds the operator. Zero allocation: aggregators zero
+// their per-group state in place via Aggregator.Reset (not Init,
+// which would reallocate the state slices). The output Batch is
+// also Reset in place. This matters for Step 6's b.Loop benchmark
+// where AggregateOp.Reset runs once per iteration.
+func (a *AggregateOp) Reset() {
+	a.child.Reset()
+	a.out.Reset()
+	for _, s := range a.specs {
+		s.Agg.Reset()
+	}
+	a.done = false
 }

@@ -120,13 +120,13 @@
 
   <h1>columnar-db — Architecture</h1>
   <p class="subtitle">
-    Static snapshot of the codebase as of Phase 4 Step 1
+    Static snapshot of the codebase as of Phase 4 Step 3
     (<code>main</code>, exec package has the <code>Operator</code> interface +
     <code>ScanOp</code>, <code>FilterOp</code>, <code>ProjectOp</code>,
+    <code>AggregateOp</code> [scalar],
     <code>Vector</code>, <code>Batch</code>, <code>Selection</code>,
-    <code>Predicate</code>; Phase 4 has added the <code>Aggregator</code>
-    interface and the <code>AggregateOp</code> operator stub —
-    implementation lands in Steps 2–5).
+    <code>Predicate</code>, <code>Aggregator</code> with 9 concrete
+    implementations. Step 4 — <code>GroupByOp</code> — is next).
   </p>
 
   <h2>Layered View</h2>
@@ -248,13 +248,13 @@
     <text x="72" y="376" fill="#c9d1d9" font-size="12">drops / reorders columns — Sel unchanged, Vectors pointer-aliased</text>
   </g>
 
-  <!-- AggregateOp (Phase 4 Step 1 stub) -->
+  <!-- AggregateOp (Phase 4 Step 3) -->
   <g>
-    <rect x="550" y="310" width="280" height="70" rx="6" fill="#162418" stroke="#7ee787" stroke-dasharray="3 2"/>
-    <text x="690" y="335" text-anchor="middle" fill="#7ee787" font-weight="700">AggregateOp <tspan font-size="11" fill="#8b949e">(stub)</tspan></text>
+    <rect x="550" y="310" width="280" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
+    <text x="690" y="335" text-anchor="middle" fill="#7ee787" font-weight="700">AggregateOp</text>
     <line x1="562" y1="344" x2="818" y2="344" stroke="#30363d"/>
-    <text x="562" y="362" fill="#c9d1d9" font-size="12">scalar aggregation, no GROUP BY</text>
-    <text x="562" y="376" fill="#c9d1d9" font-size="12">child Operator + []Aggregator</text>
+    <text x="562" y="362" fill="#c9d1d9" font-size="12">scalar aggregation (no GROUP BY)</text>
+    <text x="562" y="376" fill="#c9d1d9" font-size="12">drains child → 1-row result Batch</text>
   </g>
 
   <!-- Aggregator interface (row 3 right) -->
