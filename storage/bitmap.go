@@ -91,6 +91,61 @@ func (b *NullBitmap) HasNulls() bool {
 	return false
 }
 
+// HasNullsInRange reports whether any bit in [start, start+n) is set.
+// O(n/8) — only touches the bytes covering the requested slice, not the
+// whole bitmap. This matters on the hot path: callers like
+// Vector.CopyFromChunk run once per batch (1024 rows) over chunks that
+// can be much larger (65536+ rows), and null-free data is HasNulls()'s
+// worst case — it must scan every byte to confirm absence. The per-batch
+// scan was O(chunk_size) instead of O(batch_size); this restores the
+// expected scaling. (See docs/phase3-profiling.md for the full story —
+// note that walltime barely moved, because the original 87%-of-CPU
+// pprof attribution turned out to be sampling artifact, not real cost.)
+func (b *NullBitmap) HasNullsInRange(start, n int) bool {
+	if n <= 0 {
+		return false
+	}
+	end := start + n
+	firstByte := start / 8
+	lastByte := (end - 1) / 8
+
+	// Fast path: range fits inside whole bytes — no masking needed.
+	if start%8 == 0 && end%8 == 0 {
+		for i := firstByte; i <= lastByte; i++ {
+			if b.data[i] != 0 {
+				return true
+			}
+		}
+		return false
+	}
+
+	// First byte: mask off bits before `start`.
+	firstMask := byte(0xFF) << (start % 8)
+	if firstByte == lastByte {
+		// Single-byte range: also mask off bits at/after `end`.
+		lastMask := byte(0xFF) >> (8 - end%8)
+		if end%8 == 0 {
+			lastMask = 0xFF
+		}
+		return b.data[firstByte]&firstMask&lastMask != 0
+	}
+	if b.data[firstByte]&firstMask != 0 {
+		return true
+	}
+	// Middle whole bytes.
+	for i := firstByte + 1; i < lastByte; i++ {
+		if b.data[i] != 0 {
+			return true
+		}
+	}
+	// Last byte: mask off bits at/after `end`.
+	lastMask := byte(0xFF) >> (8 - end%8)
+	if end%8 == 0 {
+		lastMask = 0xFF
+	}
+	return b.data[lastByte]&lastMask != 0
+}
+
 // popcount returns the number of set bits in a byte.
 // (Hamming weight / Brian Kernighan's algorithm)
 func popcount(x byte) int {

@@ -147,6 +147,111 @@ func TestNullBitmapEdgeCases(t *testing.T) {
 	}
 }
 
+func TestHasNullsInRange(t *testing.T) {
+	// Build a 100-row bitmap with nulls at known positions, then query
+	// every interesting [start, start+n) range. The masking edges
+	// (start mid-byte, end mid-byte, single-byte range, range fully
+	// inside one byte, range exactly aligned) all need coverage —
+	// this is a hot-path bit-twiddler and "looks right" is not enough.
+	bm := NewNullBitmap(100)
+	nullPositions := []int{3, 17, 64, 65, 99}
+	for _, p := range nullPositions {
+		bm.SetNull(p)
+	}
+
+	cases := []struct {
+		name  string
+		start int
+		n     int
+		want  bool
+	}{
+		{"empty range n=0", 0, 0, false},
+		{"n=0 mid-byte", 5, 0, false},
+
+		// Aligned fast path (start%8==0, end%8==0)
+		{"aligned [0,8) hits null at 3", 0, 8, true},
+		{"aligned [8,16) clean", 8, 8, false},
+		{"aligned [16,24) hits 17", 16, 8, true},
+		{"aligned [24,64) clean", 24, 40, false},
+		{"aligned [64,72) hits 64,65", 64, 8, true},
+
+		// Single-byte range, both edges mid-byte
+		{"single byte [0,3) excludes 3", 0, 3, false},
+		{"single byte [0,4) includes 3", 0, 4, true},
+		{"single byte [3,4) is exactly 3", 3, 1, true},
+		{"single byte [4,8) excludes 3", 4, 4, false},
+		{"single byte [17,18) is exactly 17", 17, 1, true},
+		{"single byte [16,17) excludes 17", 16, 1, false},
+
+		// Multi-byte, mid-byte start, byte-aligned end
+		{"[3,16) starts on null", 3, 13, true},
+		{"[4,16) excludes null at 3", 4, 12, false},
+		{"[4,17) excludes both", 4, 13, false},
+		{"[4,18) catches 17", 4, 14, true},
+
+		// Multi-byte, byte-aligned start, mid-byte end
+		{"[0,17) excludes 17, hits 3", 0, 17, true},
+		{"[8,17) clean", 8, 9, false},
+		{"[8,18) catches 17", 8, 10, true},
+
+		// Multi-byte, both edges mid-byte, null only in middle byte
+		{"[5,70) catches 17,64,65", 5, 65, true},
+		{"[18,64) clean (gap between 17 and 64)", 18, 46, false},
+		{"[18,65) catches 64", 18, 47, true},
+
+		// Boundaries
+		{"null exactly at start (mid-byte)", 17, 1, true},
+		{"null exactly at end-1 (mid-byte)", 0, 18, true},
+		{"null at end (excluded)", 0, 17, true},  // 3 is in [0,17), 17 is not
+		{"position past last null", 18, 46, false},
+		{"last bit, null at 99", 99, 1, true},
+		{"last bit, [98,99) clean", 98, 1, false},
+		{"last byte exactly aligned [96,100)", 96, 4, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bm.HasNullsInRange(tc.start, tc.n); got != tc.want {
+				t.Errorf("HasNullsInRange(%d, %d) = %v, want %v",
+					tc.start, tc.n, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHasNullsInRangeAgreesWithIsNull(t *testing.T) {
+	// Differential test: for every [start, start+n) range over a
+	// pseudo-random bitmap, HasNullsInRange must agree with the slow
+	// reference (loop over IsNull). This catches anything the table
+	// above missed — particularly stride-of-1 boundary errors.
+	rng := rand.New(rand.NewSource(1))
+	const n = 200
+	bm := NewNullBitmap(n)
+	for i := range n {
+		if rng.Intn(5) == 0 {
+			bm.SetNull(i)
+		}
+	}
+	reference := func(start, k int) bool {
+		for i := 0; i < k; i++ {
+			if bm.IsNull(start + i) {
+				return true
+			}
+		}
+		return false
+	}
+	for start := 0; start <= n; start++ {
+		for k := 0; start+k <= n; k++ {
+			want := reference(start, k)
+			got := bm.HasNullsInRange(start, k)
+			if got != want {
+				t.Fatalf("HasNullsInRange(%d, %d) = %v, want %v",
+					start, k, got, want)
+			}
+		}
+	}
+}
+
 func TestPopcount(t *testing.T) {
 	tests := []struct {
 		input byte
