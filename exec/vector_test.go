@@ -40,7 +40,7 @@ func TestNewVectorAllTypes(t *testing.T) {
 
 func TestVectorInt64AppendAndRead(t *testing.T) {
 	v := NewVector(storage.TypeInt64)
-	for i := 0; i < VectorSize; i++ {
+	for i := range VectorSize {
 		if err := v.AppendInt64(int64(i * 2)); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
@@ -55,7 +55,7 @@ func TestVectorInt64AppendAndRead(t *testing.T) {
 	}
 
 	col := v.Values.(*storage.Int64Column)
-	for i := 0; i < VectorSize; i++ {
+	for i := range VectorSize {
 		if got := col.Get(i); got != int64(i*2) {
 			t.Fatalf("row %d: got %d, want %d", i, got, i*2)
 		}
@@ -67,7 +67,7 @@ func TestVectorInt64AppendAndRead(t *testing.T) {
 
 func TestVectorFloat64AppendAndRead(t *testing.T) {
 	v := NewVector(storage.TypeFloat64)
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		if err := v.AppendFloat64(float64(i) + 0.5); err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +129,7 @@ func TestVectorWrongTypeAppendErrors(t *testing.T) {
 func TestVectorNulls(t *testing.T) {
 	v := NewVector(storage.TypeInt64)
 	// Pattern: value, null, value, null, ...
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if i%2 == 0 {
 			if err := v.AppendInt64(int64(i)); err != nil {
 				t.Fatal(err)
@@ -143,7 +143,7 @@ func TestVectorNulls(t *testing.T) {
 	if v.Len() != 10 {
 		t.Fatalf("Len = %d, want 10", v.Len())
 	}
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wantNull := i%2 == 1
 		if got := v.IsNull(i); got != wantNull {
 			t.Errorf("row %d: IsNull = %v, want %v", i, got, wantNull)
@@ -177,7 +177,7 @@ func TestVectorNullsAllTypes(t *testing.T) {
 
 func TestVectorReset(t *testing.T) {
 	v := NewVector(storage.TypeInt64)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		_ = v.AppendInt64(int64(i))
 	}
 	_ = v.AppendNull()
@@ -221,7 +221,7 @@ func TestVectorIsNullOutOfRangePanics(t *testing.T) {
 
 func TestVectorAppendNullOverflow(t *testing.T) {
 	v := NewVector(storage.TypeInt64)
-	for i := 0; i < VectorSize; i++ {
+	for i := range VectorSize {
 		if err := v.AppendNull(); err != nil {
 			t.Fatalf("null %d: %v", i, err)
 		}
@@ -234,7 +234,7 @@ func TestVectorAppendNullOverflow(t *testing.T) {
 func TestVectorTypedAccessors(t *testing.T) {
 	// Int64
 	vi := NewVector(storage.TypeInt64)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		_ = vi.AppendInt64(int64(i * 3))
 	}
 	ints := vi.Int64s()
@@ -276,7 +276,7 @@ func TestVectorTypedAccessorLengthMatchesLen(t *testing.T) {
 	// Accessors must return a slice of exactly Len() — not the full backing
 	// capacity of VectorSize. Filter relies on this.
 	v := NewVector(storage.TypeInt64)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		_ = v.AppendInt64(int64(i))
 	}
 	if got := len(v.Int64s()); got != 50 {
@@ -288,7 +288,7 @@ func TestVectorResetNoGhosts(t *testing.T) {
 	// After Reset, a fresh pattern of nulls must not see leftover nulls
 	// from the previous fill.
 	v := NewVector(storage.TypeInt64)
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		_ = v.AppendNull()
 	}
 	if v.Nulls.NullCount() != 50 {
@@ -298,13 +298,13 @@ func TestVectorResetNoGhosts(t *testing.T) {
 	v.Reset()
 
 	// Fill with non-null values. Nothing should report null.
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		_ = v.AppendInt64(int64(i))
 	}
 	if v.Nulls.NullCount() != 0 {
 		t.Errorf("after Reset+refill: NullCount = %d, want 0 (ghost nulls)", v.Nulls.NullCount())
 	}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		if v.IsNull(i) {
 			t.Errorf("row %d reported null after Reset", i)
 		}
@@ -316,14 +316,14 @@ func TestVectorResetZeroAllocs(t *testing.T) {
 	// ever regresses, Step 6's benchmark target will fail — catch it now.
 	v := NewVector(storage.TypeInt64)
 	// Prime: fill once so backing capacities exist.
-	for i := 0; i < VectorSize; i++ {
+	for i := range VectorSize {
 		_ = v.AppendInt64(int64(i))
 	}
 	v.Reset()
 
 	allocs := testing.AllocsPerRun(100, func() {
 		v.Reset()
-		for i := 0; i < VectorSize; i++ {
+		for i := range VectorSize {
 			_ = v.AppendInt64(int64(i))
 		}
 	})

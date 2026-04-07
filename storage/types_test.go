@@ -8,7 +8,7 @@ func TestInt64Column(t *testing.T) {
 	col := NewInt64Column()
 
 	// Append 1000 values
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		col.Append(int64(i * 3))
 	}
 
@@ -20,7 +20,7 @@ func TestInt64Column(t *testing.T) {
 	}
 
 	// Verify values
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		expected := int64(i * 3)
 		if got := col.Get(i); got != expected {
 			t.Fatalf("index %d: expected %d, got %d", i, expected, got)
@@ -45,7 +45,7 @@ func TestInt64ColumnFromSlice(t *testing.T) {
 
 func TestFloat64Column(t *testing.T) {
 	col := NewFloat64Column()
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		col.Append(float64(i) * 1.5)
 	}
 
@@ -80,7 +80,7 @@ func TestStringColumn(t *testing.T) {
 
 func TestBoolColumn(t *testing.T) {
 	col := NewBoolColumn()
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		col.Append(i%2 == 0)
 	}
 

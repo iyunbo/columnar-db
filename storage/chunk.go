@@ -58,8 +58,8 @@ func NewColumnChunkNoNulls(name string, values Column) *ColumnChunk {
 // ColumnStats holds summary statistics for a column chunk.
 // Used for zone maps / skip scanning in Phase 6.
 type ColumnStats struct {
-	Min       interface{} // minimum non-null value
-	Max       interface{} // maximum non-null value
+	Min       any // minimum non-null value
+	Max       any // maximum non-null value
 	NullCount int
 	Count     int
 }
@@ -87,7 +87,7 @@ func (c *ColumnChunk) Stats() ColumnStats {
 
 // --- Stats helpers ---
 
-func int64Stats(col *Int64Column, nulls *NullBitmap) (interface{}, interface{}) {
+func int64Stats(col *Int64Column, nulls *NullBitmap) (any, any) {
 	var min, max int64
 	first := true
 	for i := 0; i < col.Len(); i++ {
@@ -113,7 +113,7 @@ func int64Stats(col *Int64Column, nulls *NullBitmap) (interface{}, interface{}) 
 	return min, max
 }
 
-func float64Stats(col *Float64Column, nulls *NullBitmap) (interface{}, interface{}) {
+func float64Stats(col *Float64Column, nulls *NullBitmap) (any, any) {
 	min, max := math.Inf(1), math.Inf(-1)
 	first := true
 	for i := 0; i < col.Len(); i++ {
@@ -139,7 +139,7 @@ func float64Stats(col *Float64Column, nulls *NullBitmap) (interface{}, interface
 	return min, max
 }
 
-func stringStats(col *StringColumn, nulls *NullBitmap) (interface{}, interface{}) {
+func stringStats(col *StringColumn, nulls *NullBitmap) (any, any) {
 	var min, max string
 	first := true
 	for i := 0; i < col.Len(); i++ {
@@ -165,7 +165,7 @@ func stringStats(col *StringColumn, nulls *NullBitmap) (interface{}, interface{}
 	return min, max
 }
 
-func boolStats(col *BoolColumn, nulls *NullBitmap) (interface{}, interface{}) {
+func boolStats(col *BoolColumn, nulls *NullBitmap) (any, any) {
 	hasFalse, hasTrue := false, false
 	for i := 0; i < col.Len(); i++ {
 		if nulls.IsNull(i) {

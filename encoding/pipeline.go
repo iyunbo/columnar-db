@@ -8,7 +8,7 @@ import "fmt"
 // This represents the full column write path:
 //
 //	typed data → column-aware encoding → general-purpose compression → bytes
-func EncodeThenCompress(enc Encoder, comp Compressor, data interface{}) ([]byte, error) {
+func EncodeThenCompress(enc Encoder, comp Compressor, data any) ([]byte, error) {
 	encoded, err := enc.Encode(data)
 	if err != nil {
 		return nil, fmt.Errorf("encode (%s): %w", enc.Type(), err)
@@ -28,7 +28,7 @@ func EncodeThenCompress(enc Encoder, comp Compressor, data interface{}) ([]byte,
 // This represents the full column read path:
 //
 //	bytes → general-purpose decompression → column-aware decoding → typed data
-func DecompressThenDecode(enc Encoder, comp Compressor, compressed []byte, count int) (interface{}, error) {
+func DecompressThenDecode(enc Encoder, comp Compressor, compressed []byte, count int) (any, error) {
 	encoded, err := comp.Decompress(compressed)
 	if err != nil {
 		return nil, fmt.Errorf("decompress (%s): %w", comp.Name(), err)

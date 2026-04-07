@@ -84,10 +84,7 @@ func TestWriteSampleFile(t *testing.T) {
 		if len(got) != len(ref) {
 			t.Errorf("file sizes differ: got %d, ref %d", len(got), len(ref))
 		}
-		minLen := len(got)
-		if len(ref) < minLen {
-			minLen = len(ref)
-		}
+		minLen := min(len(ref), len(got))
 		for i := 0; i < minLen; i++ {
 			if got[i] != ref[i] {
 				t.Errorf("byte %d differs: got 0x%02X, want 0x%02X", i, got[i], ref[i])
@@ -222,7 +219,7 @@ func TestWriteNullHandling(t *testing.T) {
 	// Skip schema: num_columns(2) + 2 column entries.
 	numCols := int(binary.LittleEndian.Uint16(got[pos:]))
 	pos += 2
-	for i := 0; i < numCols; i++ {
+	for range numCols {
 		nameLen := int(binary.LittleEndian.Uint16(got[pos:]))
 		pos += 2 + nameLen + 1
 	}

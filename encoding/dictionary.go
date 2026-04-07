@@ -37,7 +37,7 @@ func NewDictionaryEncoder() *DictionaryEncoder {
 func (e *DictionaryEncoder) Type() EncodingType { return Dictionary }
 
 // Encode serializes a typed slice to bytes using dictionary encoding.
-func (e *DictionaryEncoder) Encode(data interface{}) ([]byte, error) {
+func (e *DictionaryEncoder) Encode(data any) ([]byte, error) {
 	switch v := data.(type) {
 	case []int64:
 		return dictEncodeInt64(v), nil
@@ -54,7 +54,7 @@ func (e *DictionaryEncoder) Encode(data interface{}) ([]byte, error) {
 
 // Decode deserializes dictionary-encoded bytes back into a typed slice.
 // Like PlainEncoder, callers should use the typed methods directly.
-func (e *DictionaryEncoder) Decode(encoded []byte, count int) (interface{}, error) {
+func (e *DictionaryEncoder) Decode(encoded []byte, count int) (any, error) {
 	return nil, fmt.Errorf("dictionary decode: use typed methods (DictDecodeInt64, DictDecodeFloat64, DictDecodeString, DictDecodeBool)")
 }
 
@@ -124,7 +124,7 @@ func DictDecodeInt64(encoded []byte, count int) ([]int64, error) {
 
 	// Read dictionary.
 	dict := make([]int64, dictSize)
-	for i := 0; i < dictSize; i++ {
+	for i := range dictSize {
 		if offset+8 > len(encoded) {
 			return nil, fmt.Errorf("dict decode int64: unexpected end reading dict entry %d", i)
 		}
@@ -145,7 +145,7 @@ func DictDecodeInt64(encoded []byte, count int) ([]int64, error) {
 
 	// Read indices and resolve.
 	result := make([]int64, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if offset+4 > len(encoded) {
 			return nil, fmt.Errorf("dict decode int64: unexpected end reading index %d", i)
 		}
@@ -220,7 +220,7 @@ func DictDecodeFloat64(encoded []byte, count int) ([]float64, error) {
 	offset += 4
 
 	dict := make([]float64, dictSize)
-	for i := 0; i < dictSize; i++ {
+	for i := range dictSize {
 		if offset+8 > len(encoded) {
 			return nil, fmt.Errorf("dict decode float64: unexpected end reading dict entry %d", i)
 		}
@@ -239,7 +239,7 @@ func DictDecodeFloat64(encoded []byte, count int) ([]float64, error) {
 	}
 
 	result := make([]float64, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if offset+4 > len(encoded) {
 			return nil, fmt.Errorf("dict decode float64: unexpected end reading index %d", i)
 		}
@@ -324,7 +324,7 @@ func DictDecodeString(encoded []byte, count int) ([]string, error) {
 	offset += 4
 
 	dict := make([]string, dictSize)
-	for i := 0; i < dictSize; i++ {
+	for i := range dictSize {
 		if offset+4 > len(encoded) {
 			return nil, fmt.Errorf("dict decode string: unexpected end reading str_len for entry %d", i)
 		}
@@ -348,7 +348,7 @@ func DictDecodeString(encoded []byte, count int) ([]string, error) {
 	}
 
 	result := make([]string, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if offset+4 > len(encoded) {
 			return nil, fmt.Errorf("dict decode string: unexpected end reading index %d", i)
 		}
@@ -427,7 +427,7 @@ func DictDecodeBool(encoded []byte, count int) ([]bool, error) {
 	offset += 4
 
 	dict := make([]bool, dictSize)
-	for i := 0; i < dictSize; i++ {
+	for i := range dictSize {
 		if offset+1 > len(encoded) {
 			return nil, fmt.Errorf("dict decode bool: unexpected end reading dict entry %d", i)
 		}
@@ -446,7 +446,7 @@ func DictDecodeBool(encoded []byte, count int) ([]bool, error) {
 	}
 
 	result := make([]bool, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if offset+4 > len(encoded) {
 			return nil, fmt.Errorf("dict decode bool: unexpected end reading index %d", i)
 		}

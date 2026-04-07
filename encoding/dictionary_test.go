@@ -54,7 +54,7 @@ func TestDictEncode_AllSameValue(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if decoded[i] != "hello" {
 			t.Errorf("index %d: got %q, want %q", i, decoded[i], "hello")
 		}
@@ -111,7 +111,7 @@ func TestDictEncode_AllUnique(t *testing.T) {
 func TestDictEncode_Empty(t *testing.T) {
 	tests := []struct {
 		name string
-		data interface{}
+		data any
 	}{
 		{"int64", []int64{}},
 		{"float64", []float64{}},
@@ -227,7 +227,7 @@ func TestDictEncode_LargeData_CompressionRatio(t *testing.T) {
 
 	// Generate 100 unique city-like strings.
 	uniqueValues := make([]string, cardinality)
-	for i := 0; i < cardinality; i++ {
+	for i := range cardinality {
 		uniqueValues[i] = fmt.Sprintf("city_%03d_name", i)
 	}
 
@@ -267,7 +267,7 @@ func TestDictEncode_LargeData_CompressionRatio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		if decoded[i] != data[i] {
 			t.Errorf("index %d: got %q, want %q", i, decoded[i], data[i])
 		}
@@ -363,7 +363,7 @@ func BenchmarkDictEncode_1M_Strings(b *testing.B) {
 	n := 1_000_000
 	cardinality := 100
 	uniqueValues := make([]string, cardinality)
-	for i := 0; i < cardinality; i++ {
+	for i := range cardinality {
 		uniqueValues[i] = fmt.Sprintf("value_%03d", i)
 	}
 	rng := rand.New(rand.NewSource(42))
@@ -373,8 +373,8 @@ func BenchmarkDictEncode_1M_Strings(b *testing.B) {
 	}
 
 	enc := NewDictionaryEncoder()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		enc.Encode(data)
 	}
 }
@@ -383,7 +383,7 @@ func BenchmarkDictDecode_1M_Strings(b *testing.B) {
 	n := 1_000_000
 	cardinality := 100
 	uniqueValues := make([]string, cardinality)
-	for i := 0; i < cardinality; i++ {
+	for i := range cardinality {
 		uniqueValues[i] = fmt.Sprintf("value_%03d", i)
 	}
 	rng := rand.New(rand.NewSource(42))
@@ -395,8 +395,7 @@ func BenchmarkDictDecode_1M_Strings(b *testing.B) {
 	enc := NewDictionaryEncoder()
 	encoded, _ := enc.Encode(data)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		DictDecodeString(encoded, n)
 	}
 }
@@ -410,8 +409,8 @@ func BenchmarkDictEncode_1M_Int64(b *testing.B) {
 	}
 
 	enc := NewDictionaryEncoder()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		enc.Encode(data)
 	}
 }
@@ -427,8 +426,7 @@ func BenchmarkDictDecode_1M_Int64(b *testing.B) {
 	enc := NewDictionaryEncoder()
 	encoded, _ := enc.Encode(data)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		DictDecodeInt64(encoded, n)
 	}
 }
