@@ -225,11 +225,12 @@ func (v *Vector) CopyFromChunk(chunk *storage.ColumnChunk, start, n int) error {
 	v.length = n
 
 	// Copy nulls. The source chunk's null bitmap is indexed by absolute row
-	// [start,end); the destination bitmap is indexed by [0,n). We use
-	// HasNulls() (which short-circuits on the first non-zero byte, O(1)
-	// amortized for dense data) rather than a cached count — the chunk's
-	// bitmap is live and could have been mutated after construction.
-	if chunk.Nulls.HasNulls() {
+	// [start,end); the destination bitmap is indexed by [0,n). We ask
+	// HasNullsInRange about just this batch's slice rather than the whole
+	// chunk — null-free data is HasNulls()'s worst case (must scan every
+	// byte to confirm), and chunks grow much larger than batches. See
+	// docs/phase3-profiling.md for the profiling story.
+	if chunk.Nulls.HasNullsInRange(start, n) {
 		for i := range n {
 			if chunk.Nulls.IsNull(start + i) {
 				v.Nulls.SetNull(i)
