@@ -14,6 +14,21 @@ func NewInt64Column() *Int64Column {
 	return &Int64Column{}
 }
 
+// NewInt64ColumnSized creates an empty Int64 column with backing storage
+// pre-allocated to the given capacity. Use this when the final size is
+// known up front (e.g. a vectorized batch of VectorSize values) to avoid
+// grow-and-copy cycles during Append.
+func NewInt64ColumnSized(capacity int) *Int64Column {
+	return &Int64Column{data: make([]int64, 0, capacity)}
+}
+
+// Reset truncates the column to zero length while retaining the backing
+// array for reuse. This is the allocation-free path for operators that
+// recycle vectors across batches.
+func (c *Int64Column) Reset() {
+	c.data = c.data[:0]
+}
+
 // NewInt64ColumnFromSlice creates a column from existing data.
 func NewInt64ColumnFromSlice(data []int64) *Int64Column {
 	cp := make([]int64, len(data))

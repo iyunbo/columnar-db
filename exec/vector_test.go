@@ -198,12 +198,136 @@ func TestVectorReset(t *testing.T) {
 }
 
 func TestVectorIsNullOutOfRangePanics(t *testing.T) {
+	cases := []struct {
+		name string
+		idx  int
+	}{
+		{"above length", 5},
+		{"negative", -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := NewVector(storage.TypeInt64)
+			_ = v.AppendInt64(1)
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("expected panic on IsNull(%d)", tc.idx)
+				}
+			}()
+			v.IsNull(tc.idx)
+		})
+	}
+}
+
+func TestVectorAppendNullOverflow(t *testing.T) {
 	v := NewVector(storage.TypeInt64)
-	_ = v.AppendInt64(1)
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic on out-of-range IsNull")
+	for i := 0; i < VectorSize; i++ {
+		if err := v.AppendNull(); err != nil {
+			t.Fatalf("null %d: %v", i, err)
 		}
-	}()
-	v.IsNull(5)
+	}
+	if err := v.AppendNull(); err == nil {
+		t.Error("expected overflow error on AppendNull past VectorSize")
+	}
+}
+
+func TestVectorTypedAccessors(t *testing.T) {
+	// Int64
+	vi := NewVector(storage.TypeInt64)
+	for i := 0; i < 100; i++ {
+		_ = vi.AppendInt64(int64(i * 3))
+	}
+	ints := vi.Int64s()
+	if len(ints) != 100 {
+		t.Fatalf("Int64s len = %d, want 100", len(ints))
+	}
+	for i, got := range ints {
+		if got != int64(i*3) {
+			t.Fatalf("Int64s[%d] = %d, want %d", i, got, i*3)
+		}
+	}
+
+	// Float64
+	vf := NewVector(storage.TypeFloat64)
+	_ = vf.AppendFloat64(1.5)
+	_ = vf.AppendFloat64(2.5)
+	if got := vf.Float64s(); len(got) != 2 || got[0] != 1.5 || got[1] != 2.5 {
+		t.Errorf("Float64s = %v", got)
+	}
+
+	// String
+	vs := NewVector(storage.TypeString)
+	_ = vs.AppendString("a")
+	_ = vs.AppendString("b")
+	if got := vs.Strings(); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Errorf("Strings = %v", got)
+	}
+
+	// Bool
+	vb := NewVector(storage.TypeBool)
+	_ = vb.AppendBool(true)
+	_ = vb.AppendBool(false)
+	if got := vb.Bools(); len(got) != 2 || !got[0] || got[1] {
+		t.Errorf("Bools = %v", got)
+	}
+}
+
+func TestVectorTypedAccessorLengthMatchesLen(t *testing.T) {
+	// Accessors must return a slice of exactly Len() — not the full backing
+	// capacity of VectorSize. Filter relies on this.
+	v := NewVector(storage.TypeInt64)
+	for i := 0; i < 50; i++ {
+		_ = v.AppendInt64(int64(i))
+	}
+	if got := len(v.Int64s()); got != 50 {
+		t.Errorf("len(Int64s()) = %d, want 50 (not %d backing capacity)", got, VectorSize)
+	}
+}
+
+func TestVectorResetNoGhosts(t *testing.T) {
+	// After Reset, a fresh pattern of nulls must not see leftover nulls
+	// from the previous fill.
+	v := NewVector(storage.TypeInt64)
+	for i := 0; i < 50; i++ {
+		_ = v.AppendNull()
+	}
+	if v.Nulls.NullCount() != 50 {
+		t.Fatalf("setup: NullCount = %d, want 50", v.Nulls.NullCount())
+	}
+
+	v.Reset()
+
+	// Fill with non-null values. Nothing should report null.
+	for i := 0; i < 50; i++ {
+		_ = v.AppendInt64(int64(i))
+	}
+	if v.Nulls.NullCount() != 0 {
+		t.Errorf("after Reset+refill: NullCount = %d, want 0 (ghost nulls)", v.Nulls.NullCount())
+	}
+	for i := 0; i < 50; i++ {
+		if v.IsNull(i) {
+			t.Errorf("row %d reported null after Reset", i)
+		}
+	}
+}
+
+func TestVectorResetZeroAllocs(t *testing.T) {
+	// Reset is supposed to be the allocation-free recycle path. If this
+	// ever regresses, Step 6's benchmark target will fail — catch it now.
+	v := NewVector(storage.TypeInt64)
+	// Prime: fill once so backing capacities exist.
+	for i := 0; i < VectorSize; i++ {
+		_ = v.AppendInt64(int64(i))
+	}
+	v.Reset()
+
+	allocs := testing.AllocsPerRun(100, func() {
+		v.Reset()
+		for i := 0; i < VectorSize; i++ {
+			_ = v.AppendInt64(int64(i))
+		}
+	})
+	if allocs != 0 {
+		t.Errorf("Reset+refill allocs/op = %v, want 0", allocs)
+	}
 }

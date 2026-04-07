@@ -5,6 +5,11 @@
 // of the row-at-a-time Volcano model: it's cache-friendly, branch-predictor
 // friendly, and maps naturally onto SIMD — and it's what makes modern
 // columnar engines (DuckDB, ClickHouse, Vectorwise) fast.
+//
+// Error conventions in this package:
+//   - Out-of-range index access panics (matches Go slice semantics).
+//   - API misuse that a caller can meaningfully recover from (wrong type,
+//     vector full) returns an error.
 package exec
 
 import (
@@ -28,12 +33,24 @@ const VectorSize = 1024
 // drops them, and aggregation consumes them. Nothing in the engine ever
 // materializes a full row until the very end — values live column-wise
 // in these batches from disk to final output.
+//
+// Layout invariant: Values.Len() == length at all times, even when nulls
+// are appended (nulls store a zero-value placeholder in Values so that
+// row index i maps to the same position in both Values and Nulls). This
+// keeps the filter hot path able to index the typed slice directly
+// without consulting the null bitmap.
 type Vector struct {
 	// Type of every value in this vector.
 	Type storage.ColumnType
 
 	// Values holds the actual data as a typed column (reuses Phase 1
-	// storage.Column implementations). Capacity is always VectorSize.
+	// storage.Column implementations). Backing slice is pre-allocated
+	// to VectorSize at construction to avoid grow-and-copy during fill.
+	//
+	// Prefer the typed accessors (Int64s / Float64s / Strings / Bools)
+	// over type-asserting this field directly — they do the assertion
+	// once and return a raw slice that Filter can iterate in a tight
+	// loop with no interface overhead.
 	Values storage.Column
 
 	// Nulls is a bitmap of length VectorSize. Bit i is set iff row i is NULL.
@@ -41,45 +58,77 @@ type Vector struct {
 	// can do a branchless check.
 	Nulls *storage.NullBitmap
 
-	// Length is the number of live values in the vector. May be less than
-	// VectorSize for the last batch of a row group.
-	Length int
+	// length is the number of live values in the vector. Unexported so
+	// callers cannot desync it from Values and Nulls — use Len() to read,
+	// Append* / AppendNull / Reset to mutate.
+	length int
 }
 
-// NewVector creates an empty vector for the given type, pre-sized to
-// VectorSize. Length starts at 0 — call the type-specific Append* helpers
-// (or Scan, later) to fill it.
+// NewVector creates an empty vector for the given type with backing
+// storage pre-allocated to VectorSize. Length starts at 0 — call the
+// type-specific Append helpers (or Scan, later) to fill it.
 func NewVector(t storage.ColumnType) *Vector {
 	return &Vector{
 		Type:   t,
-		Values: newColumnForType(t),
+		Values: newSizedColumnForType(t, VectorSize),
 		Nulls:  storage.NewNullBitmap(VectorSize),
-		Length: 0,
+		length: 0,
 	}
 }
 
 // Len returns the number of live values in the vector.
-func (v *Vector) Len() int { return v.Length }
+func (v *Vector) Len() int { return v.length }
 
 // IsNull reports whether row i in the vector is NULL.
 // Panics if i is out of range.
 func (v *Vector) IsNull(i int) bool {
-	if i < 0 || i >= v.Length {
-		panic(fmt.Sprintf("exec: Vector.IsNull index %d out of range [0,%d)", i, v.Length))
+	if i < 0 || i >= v.length {
+		panic(fmt.Sprintf("exec: Vector.IsNull index %d out of range [0,%d)", i, v.length))
 	}
 	return v.Nulls.IsNull(i)
 }
 
-// Reset clears the vector for reuse without reallocating. The underlying
-// typed column is replaced with a fresh empty one (cheap — just a slice
-// header reset) and the null bitmap is zeroed.
-//
-// Operators reuse Vectors across batches to keep allocations out of the
-// hot path.
+// Reset clears the vector for reuse without allocating. The backing
+// typed slice is truncated in place and the null bitmap is zeroed —
+// operators can recycle a single Vector across every batch of a scan.
 func (v *Vector) Reset() {
-	v.Values = newColumnForType(v.Type)
-	v.Nulls = storage.NewNullBitmap(VectorSize)
-	v.Length = 0
+	switch c := v.Values.(type) {
+	case *storage.Int64Column:
+		c.Reset()
+	case *storage.Float64Column:
+		c.Reset()
+	case *storage.StringColumn:
+		c.Reset()
+	case *storage.BoolColumn:
+		c.Reset()
+	default:
+		panic(fmt.Sprintf("exec: Reset on unknown column type %s", v.Type))
+	}
+	v.Nulls.Reset()
+	v.length = 0
+}
+
+// Int64s returns the underlying []int64 backing an Int64 vector. Panics
+// if the vector is not of type Int64. The returned slice has length
+// equal to v.Len() — safe to iterate with a tight for-range loop in the
+// filter hot path.
+func (v *Vector) Int64s() []int64 {
+	return v.Values.(*storage.Int64Column).Values()[:v.length]
+}
+
+// Float64s returns the underlying []float64 backing a Float64 vector.
+func (v *Vector) Float64s() []float64 {
+	return v.Values.(*storage.Float64Column).Values()[:v.length]
+}
+
+// Strings returns the underlying []string backing a String vector.
+func (v *Vector) Strings() []string {
+	return v.Values.(*storage.StringColumn).Values()[:v.length]
+}
+
+// Bools returns the underlying []bool backing a Bool vector.
+func (v *Vector) Bools() []bool {
+	return v.Values.(*storage.BoolColumn).Values()[:v.length]
 }
 
 // AppendInt64 appends an Int64 value to the vector. Returns an error if
@@ -88,11 +137,11 @@ func (v *Vector) AppendInt64(x int64) error {
 	if v.Type != storage.TypeInt64 {
 		return fmt.Errorf("exec: AppendInt64 on %s vector", v.Type)
 	}
-	if v.Length >= VectorSize {
+	if v.length >= VectorSize {
 		return fmt.Errorf("exec: vector full (size %d)", VectorSize)
 	}
 	v.Values.(*storage.Int64Column).Append(x)
-	v.Length++
+	v.length++
 	return nil
 }
 
@@ -101,11 +150,11 @@ func (v *Vector) AppendFloat64(x float64) error {
 	if v.Type != storage.TypeFloat64 {
 		return fmt.Errorf("exec: AppendFloat64 on %s vector", v.Type)
 	}
-	if v.Length >= VectorSize {
+	if v.length >= VectorSize {
 		return fmt.Errorf("exec: vector full (size %d)", VectorSize)
 	}
 	v.Values.(*storage.Float64Column).Append(x)
-	v.Length++
+	v.length++
 	return nil
 }
 
@@ -114,11 +163,11 @@ func (v *Vector) AppendString(s string) error {
 	if v.Type != storage.TypeString {
 		return fmt.Errorf("exec: AppendString on %s vector", v.Type)
 	}
-	if v.Length >= VectorSize {
+	if v.length >= VectorSize {
 		return fmt.Errorf("exec: vector full (size %d)", VectorSize)
 	}
 	v.Values.(*storage.StringColumn).Append(s)
-	v.Length++
+	v.length++
 	return nil
 }
 
@@ -127,23 +176,22 @@ func (v *Vector) AppendBool(b bool) error {
 	if v.Type != storage.TypeBool {
 		return fmt.Errorf("exec: AppendBool on %s vector", v.Type)
 	}
-	if v.Length >= VectorSize {
+	if v.length >= VectorSize {
 		return fmt.Errorf("exec: vector full (size %d)", VectorSize)
 	}
 	v.Values.(*storage.BoolColumn).Append(b)
-	v.Length++
+	v.length++
 	return nil
 }
 
-// AppendNull appends a NULL placeholder. The caller must still append a
-// dummy typed value of the vector's type so that Values and Nulls stay
-// aligned on row indices — callers should prefer the convenience helpers
-// below which do both at once.
+// AppendNull appends a NULL at the next row. Internally it stores a
+// zero-value placeholder in Values and marks the bit in Nulls, so the
+// Values/Nulls alignment invariant is preserved. Returns an error if
+// the vector is full.
 func (v *Vector) AppendNull() error {
-	if v.Length >= VectorSize {
+	if v.length >= VectorSize {
 		return fmt.Errorf("exec: vector full (size %d)", VectorSize)
 	}
-	// Store a zero-value placeholder so Values.Len() stays in sync with Length.
 	switch v.Type {
 	case storage.TypeInt64:
 		v.Values.(*storage.Int64Column).Append(0)
@@ -154,25 +202,25 @@ func (v *Vector) AppendNull() error {
 	case storage.TypeBool:
 		v.Values.(*storage.BoolColumn).Append(false)
 	default:
-		return fmt.Errorf("exec: unknown vector type %s", v.Type)
+		panic(fmt.Sprintf("exec: AppendNull on unknown vector type %s", v.Type))
 	}
-	v.Nulls.SetNull(v.Length)
-	v.Length++
+	v.Nulls.SetNull(v.length)
+	v.length++
 	return nil
 }
 
-// newColumnForType constructs an empty typed column for use as a Vector's
-// backing storage.
-func newColumnForType(t storage.ColumnType) storage.Column {
+// newSizedColumnForType constructs a typed column with backing slice
+// pre-allocated to capacity.
+func newSizedColumnForType(t storage.ColumnType, capacity int) storage.Column {
 	switch t {
 	case storage.TypeInt64:
-		return storage.NewInt64Column()
+		return storage.NewInt64ColumnSized(capacity)
 	case storage.TypeFloat64:
-		return storage.NewFloat64Column()
+		return storage.NewFloat64ColumnSized(capacity)
 	case storage.TypeString:
-		return storage.NewStringColumn()
+		return storage.NewStringColumnSized(capacity)
 	case storage.TypeBool:
-		return storage.NewBoolColumn()
+		return storage.NewBoolColumnSized(capacity)
 	default:
 		panic(fmt.Sprintf("exec: unknown column type %s", t))
 	}

@@ -9,6 +9,18 @@ func NewFloat64Column() *Float64Column {
 	return &Float64Column{}
 }
 
+// NewFloat64ColumnSized creates an empty column with backing storage
+// pre-allocated to the given capacity.
+func NewFloat64ColumnSized(capacity int) *Float64Column {
+	return &Float64Column{data: make([]float64, 0, capacity)}
+}
+
+// Reset truncates the column to zero length while retaining the backing
+// array for reuse.
+func (c *Float64Column) Reset() {
+	c.data = c.data[:0]
+}
+
 func NewFloat64ColumnFromSlice(data []float64) *Float64Column {
 	cp := make([]float64, len(data))
 	copy(cp, data)
