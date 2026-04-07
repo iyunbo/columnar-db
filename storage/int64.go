@@ -44,6 +44,13 @@ func (c *Int64Column) Append(v int64) {
 	c.data = append(c.data, v)
 }
 
+// AppendSlice bulk-appends a slice. When the column was constructed with
+// NewInt64ColumnSized and has sufficient remaining capacity, this runs as
+// a single memmove with no allocation — the hot path for Scan.
+func (c *Int64Column) AppendSlice(vs []int64) {
+	c.data = append(c.data, vs...)
+}
+
 // Get returns the value at index i. Panics if out of range.
 func (c *Int64Column) Get(i int) int64 {
 	return c.data[i]

@@ -34,6 +34,11 @@ func (c *Float64Column) Append(v float64) {
 	c.data = append(c.data, v)
 }
 
+// AppendSlice bulk-appends a slice. Single memmove when capacity suffices.
+func (c *Float64Column) AppendSlice(vs []float64) {
+	c.data = append(c.data, vs...)
+}
+
 func (c *Float64Column) Get(i int) float64 {
 	return c.data[i]
 }

@@ -184,6 +184,56 @@ func (v *Vector) AppendBool(b bool) error {
 	return nil
 }
 
+// CopyFromChunk bulk-copies rows [start, start+n) from a source ColumnChunk
+// into this (empty, just-Reset) vector. The vector type must match the
+// chunk type and n must be ≤ VectorSize. This is the hot path used by the
+// Scan operator: one typed memmove per column per batch, no per-row interface
+// calls. Caller must ensure the vector is empty — CopyFromChunk does not
+// check (it would defeat the zero-overhead guarantee).
+func (v *Vector) CopyFromChunk(chunk *storage.ColumnChunk, start, n int) error {
+	if v.Type != chunk.ColType {
+		return fmt.Errorf("exec: CopyFromChunk type mismatch: vector %s, chunk %s", v.Type, chunk.ColType)
+	}
+	if n > VectorSize {
+		return fmt.Errorf("exec: CopyFromChunk n=%d exceeds VectorSize=%d", n, VectorSize)
+	}
+	if start < 0 || start+n > chunk.Count {
+		return fmt.Errorf("exec: CopyFromChunk range [%d,%d) out of chunk count %d", start, start+n, chunk.Count)
+	}
+
+	end := start + n
+	switch v.Type {
+	case storage.TypeInt64:
+		src := chunk.Values.(*storage.Int64Column).Values()
+		v.Values.(*storage.Int64Column).AppendSlice(src[start:end])
+	case storage.TypeFloat64:
+		src := chunk.Values.(*storage.Float64Column).Values()
+		v.Values.(*storage.Float64Column).AppendSlice(src[start:end])
+	case storage.TypeString:
+		src := chunk.Values.(*storage.StringColumn).Values()
+		v.Values.(*storage.StringColumn).AppendSlice(src[start:end])
+	case storage.TypeBool:
+		src := chunk.Values.(*storage.BoolColumn).Values()
+		v.Values.(*storage.BoolColumn).AppendSlice(src[start:end])
+	default:
+		return fmt.Errorf("exec: CopyFromChunk unknown type %s", v.Type)
+	}
+	v.length = n
+
+	// Copy nulls. The source chunk's null bitmap is indexed by absolute row
+	// [start,end); the destination bitmap is indexed by [0,n). We only walk
+	// source bits that are set, so fully-non-null chunks pay nothing beyond
+	// the HasNulls short-circuit below.
+	if chunk.NullCount > 0 {
+		for i := range n {
+			if chunk.Nulls.IsNull(start + i) {
+				v.Nulls.SetNull(i)
+			}
+		}
+	}
+	return nil
+}
+
 // AppendNull appends a NULL at the next row. Internally it stores a
 // zero-value placeholder in Values and marks the bit in Nulls, so the
 // Values/Nulls alignment invariant is preserved. Returns an error if
