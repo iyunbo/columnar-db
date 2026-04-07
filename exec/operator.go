@@ -24,4 +24,5 @@ type Operator interface {
 var (
 	_ Operator = (*ScanOp)(nil)
 	_ Operator = (*FilterOp)(nil)
+	_ Operator = (*ProjectOp)(nil)
 )
