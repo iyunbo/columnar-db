@@ -88,7 +88,7 @@ func (rg *RowGroup) Schema() Schema {
 func (rg *RowGroup) TotalNulls() int {
 	total := 0
 	for _, col := range rg.Columns {
-		total += col.NullCount
+		total += col.NullCount()
 	}
 	return total
 }

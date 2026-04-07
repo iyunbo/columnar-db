@@ -29,8 +29,8 @@ func TestColumnChunkInt64(t *testing.T) {
 	if chunk.Count != 1000 {
 		t.Fatalf("expected count 1000, got %d", chunk.Count)
 	}
-	if chunk.NullCount != 3 {
-		t.Fatalf("expected 3 nulls, got %d", chunk.NullCount)
+	if chunk.NullCount() != 3 {
+		t.Fatalf("expected 3 nulls, got %d", chunk.NullCount())
 	}
 }
 
@@ -83,11 +83,48 @@ func TestColumnChunkNoNulls(t *testing.T) {
 	col := NewBoolColumnFromSlice([]bool{true, false, true})
 	chunk := NewColumnChunkNoNulls("active", col)
 
-	if chunk.NullCount != 0 {
-		t.Fatalf("expected 0 nulls, got %d", chunk.NullCount)
+	if chunk.NullCount() != 0 {
+		t.Fatalf("expected 0 nulls, got %d", chunk.NullCount())
 	}
 	if chunk.Count != 3 {
 		t.Fatalf("expected count 3, got %d", chunk.Count)
+	}
+}
+
+func TestColumnChunkNullCountTracksBitmapMutation(t *testing.T) {
+	// Regression guard for the NullCount foot-gun: earlier versions
+	// cached NullCount as a field set at construction, which silently
+	// drifted if a caller mutated the bitmap afterwards. NullCount is
+	// now a method that reads the live bitmap, so post-construction
+	// SetNull must be reflected.
+	col := NewInt64ColumnFromSlice([]int64{1, 2, 3, 4, 5})
+	nulls := NewNullBitmap(5)
+	chunk, err := NewColumnChunk("x", col, nulls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chunk.NullCount() != 0 {
+		t.Fatalf("initial NullCount = %d, want 0", chunk.NullCount())
+	}
+
+	// Mutate the bitmap through the chunk's field.
+	chunk.Nulls.SetNull(1)
+	chunk.Nulls.SetNull(3)
+
+	if chunk.NullCount() != 2 {
+		t.Errorf("after SetNull×2: NullCount = %d, want 2", chunk.NullCount())
+	}
+
+	// Stats() should also see the updated count.
+	if chunk.Stats().NullCount != 2 {
+		t.Errorf("Stats().NullCount = %d, want 2", chunk.Stats().NullCount)
+	}
+
+	// ClearNull also round-trips — the count tracks decreases, not
+	// just monotonic increases.
+	chunk.Nulls.ClearNull(1)
+	if chunk.NullCount() != 1 {
+		t.Errorf("after ClearNull: NullCount = %d, want 1", chunk.NullCount())
 	}
 }
 

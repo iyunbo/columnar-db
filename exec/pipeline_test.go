@@ -187,11 +187,6 @@ func TestPipelineWithNullsMatchesBaseline(t *testing.T) {
 	// Inject nulls into the age column and verify both pipelines still
 	// agree. Nulls must never match the filter, which the vectorized
 	// path tests separately — this is the end-to-end twin.
-	//
-	// Note: ColumnChunk.NullCount is frozen at construction, so we
-	// build the row group with nulls pre-set rather than mutating the
-	// bitmap on an already-constructed chunk (which would leave
-	// NullCount stale and break Scan's null-copy fast path).
 	const n = 2000
 	rng := rand.New(rand.NewPCG(42, 99))
 	ages := make([]int64, n)

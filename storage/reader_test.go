@@ -228,8 +228,8 @@ func TestRoundTripWithNulls(t *testing.T) {
 
 	// Verify int column nulls.
 	intCol := got.Column(0)
-	if intCol.NullCount != 1 {
-		t.Errorf("int NullCount = %d, want 1", intCol.NullCount)
+	if intCol.NullCount() != 1 {
+		t.Errorf("int NullCount = %d, want 1", intCol.NullCount())
 	}
 	if !intCol.Nulls.IsNull(1) {
 		t.Error("int row 1 should be null")
@@ -245,8 +245,8 @@ func TestRoundTripWithNulls(t *testing.T) {
 
 	// Verify string column nulls.
 	strCol := got.Column(1)
-	if strCol.NullCount != 1 {
-		t.Errorf("str NullCount = %d, want 1", strCol.NullCount)
+	if strCol.NullCount() != 1 {
+		t.Errorf("str NullCount = %d, want 1", strCol.NullCount())
 	}
 	if !strCol.Nulls.IsNull(1) {
 		t.Error("str row 1 should be null")
@@ -314,8 +314,8 @@ func TestReadSampleFile(t *testing.T) {
 	if nameCol.Get(2) != "charlie" {
 		t.Errorf("name[2] = %q, want \"charlie\"", nameCol.Get(2))
 	}
-	if rg.Column(1).NullCount != 1 {
-		t.Errorf("name NullCount = %d, want 1", rg.Column(1).NullCount)
+	if rg.Column(1).NullCount() != 1 {
+		t.Errorf("name NullCount = %d, want 1", rg.Column(1).NullCount())
 	}
 }
 
