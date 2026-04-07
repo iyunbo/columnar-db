@@ -345,6 +345,51 @@ func TestPipelineTripleFilterMatchesNaive(t *testing.T) {
 	}
 }
 
+func TestPipelineStringCompoundFilterMatchesNaive(t *testing.T) {
+	// Correctness twin of BenchmarkPipelineVectorizedDrainStringCompound.
+	// Mixed int64 + string predicates exercise FilterOp's column-index
+	// targeting in addition to the chained-filter selection-vector
+	// handoff.
+	const n = 10_000
+	rg := makePipelineRowGroup(t, n)
+	want := naiveRowAtATimeCountStringCompound(rg, 30, "Paris")
+	if want == 0 {
+		t.Fatal("baseline produced 0 survivors — fixture or test broken")
+	}
+
+	scan, err := NewScanOp(rg, []string{"age", "city"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f1, err := NewFilterOp(scan, 0, Int64Gt{Value: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2, err := NewFilterOp(f1, 1, StringEq{Value: "Paris"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := 0
+	for {
+		batch, ok := f2.Next()
+		if !ok {
+			break
+		}
+		ages := batch.Vectors[0].Int64s()
+		cities := batch.Vectors[1].Strings()
+		for _, i := range batch.Sel.Indices() {
+			if !(ages[i] > 30 && cities[i] == "Paris") {
+				t.Fatalf("string compound filter passed bad row: age=%d city=%q", ages[i], cities[i])
+			}
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("string compound count mismatch: vectorized=%d naive=%d", got, want)
+	}
+}
+
 func TestPipelineLargeDataset(t *testing.T) {
 	// Plan Step 6 success criterion: 1M-row dataset, ≥3 columns,
 	// correct result. The actual throughput claim is validated by the

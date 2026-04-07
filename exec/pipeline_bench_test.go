@@ -296,6 +296,89 @@ func BenchmarkPipelineVectorizedDrainTriple(b *testing.B) {
 	}
 }
 
+// --- String predicate benchmarks (Phase 3 polish, signal for Phase 4) ---
+// See: docs/phase3-string-predicate-benchmark.md
+//
+// Hypothesis: int64 compares are the vectorized engine's worst possible
+// adversary because the naive scalar inner loop compiles to CSINC and
+// runs at ~6 IPC. String equality is much more expensive per row (length
+// compare + memcmp), so the relative weight of selection-vector
+// materialization shrinks. If vectorized wins (or even ties) on a
+// compound query mixing one int64 + one string predicate, that's
+// directional evidence Phase 4's disk-backed scan will be a real win.
+// If it still loses, that's a stronger negative signal.
+//
+// Query: WHERE age > 30 AND city = "Paris"  (selectivity ~67% × 20% ≈ 13%)
+
+// naiveRowAtATimeCountStringCompound is the row-at-a-time baseline for
+// the int64 + string compound query. Both predicates evaluated per
+// non-null row, no selection vector.
+func naiveRowAtATimeCountStringCompound(rg *storage.RowGroup, threshold int64, city string) int {
+	ageChunk := rg.ColumnByName("age")
+	cityChunk := rg.ColumnByName("city")
+	ageVals := ageChunk.Values.(*storage.Int64Column)
+	cityVals := cityChunk.Values.(*storage.StringColumn)
+	ageNulls := ageChunk.Nulls
+	cityNulls := cityChunk.Nulls
+
+	count := 0
+	for i := range rg.RowCount {
+		if ageNulls.IsNull(i) || cityNulls.IsNull(i) {
+			continue
+		}
+		if ageVals.Get(i) > threshold && cityVals.Get(i) == city {
+			count++
+		}
+	}
+	return count
+}
+
+// BenchmarkPipelineNaiveCountStringCompound is the naive twin.
+func BenchmarkPipelineNaiveCountStringCompound(b *testing.B) {
+	rg := getBenchRG(b)
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = naiveRowAtATimeCountStringCompound(rg, 30, "Paris")
+	}
+}
+
+// BenchmarkPipelineVectorizedDrainStringCompound is the vectorized
+// pipeline: Scan(age, city) → Filter(age > 30) → Filter(city = "Paris")
+// → drain. Filter 2 only walks survivors via the selection vector.
+func BenchmarkPipelineVectorizedDrainStringCompound(b *testing.B) {
+	rg := getBenchRG(b)
+
+	scan, err := NewScanOp(rg, []string{"age", "city"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	f1, err := NewFilterOp(scan, 0, Int64Gt{Value: 30})
+	if err != nil {
+		b.Fatal(err)
+	}
+	f2, err := NewFilterOp(f1, 1, StringEq{Value: "Paris"})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	var survivors int
+	for b.Loop() {
+		f2.Reset()
+		survivors = 0
+		for {
+			batch, ok := f2.Next()
+			if !ok {
+				break
+			}
+			survivors += batch.Len()
+		}
+	}
+	if survivors == 0 {
+		b.Fatal("no survivors — fixture or pipeline broken")
+	}
+}
+
 // BenchmarkPipelineVectorizedDrainPushedDown is the optimistic
 // ceiling, not the current cost: Scan reads ONLY the "age" column
 // (as if a planner had pushed the projection into Scan), no
