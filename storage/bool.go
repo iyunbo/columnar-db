@@ -38,6 +38,11 @@ func (c *BoolColumn) Append(v bool) {
 	c.data = append(c.data, v)
 }
 
+// AppendSlice bulk-appends a slice. Single memmove when capacity suffices.
+func (c *BoolColumn) AppendSlice(vs []bool) {
+	c.data = append(c.data, vs...)
+}
+
 func (c *BoolColumn) Get(i int) bool {
 	return c.data[i]
 }

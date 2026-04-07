@@ -40,6 +40,13 @@ func (c *StringColumn) Append(v string) {
 	c.data = append(c.data, v)
 }
 
+// AppendSlice bulk-appends a slice. Single copy when capacity suffices —
+// strings are 16-byte headers each, so this still benefits from vectorized
+// copy even though the string bodies live elsewhere.
+func (c *StringColumn) AppendSlice(vs []string) {
+	c.data = append(c.data, vs...)
+}
+
 func (c *StringColumn) Get(i int) string {
 	return c.data[i]
 }
