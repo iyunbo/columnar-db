@@ -120,10 +120,11 @@
 
   <h1>columnar-db — Architecture</h1>
   <p class="subtitle">
-    Static snapshot of the codebase as of Phase 3 Step 4 complete
+    Static snapshot of the codebase as of Phase 3 Step 5 complete
     (<code>main</code>, exec package has the <code>Operator</code> interface +
-    <code>ScanOp</code>, <code>FilterOp</code>, <code>Vector</code>, <code>Batch</code>,
-    <code>Selection</code>, <code>Predicate</code>).
+    <code>ScanOp</code>, <code>FilterOp</code>, <code>ProjectOp</code>,
+    <code>Vector</code>, <code>Batch</code>, <code>Selection</code>,
+    <code>Predicate</code>).
   </p>
 
   <h2>Layered View</h2>
@@ -136,7 +137,7 @@
     <span><span class="swatch" style="background:var(--iface);opacity:0.7"></span>interface / abstract type</span>
   </div>
 
-<svg viewBox="0 0 1200 960" xmlns="http://www.w3.org/2000/svg" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="13">
+<svg viewBox="0 0 1200 1050" xmlns="http://www.w3.org/2000/svg" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="13">
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
@@ -156,7 +157,7 @@
   <!-- ============================== -->
   <!-- LAYER 1: EXECUTION             -->
   <!-- ============================== -->
-  <rect x="20" y="20" width="1160" height="290" rx="10"
+  <rect x="20" y="20" width="1160" height="380" rx="10"
         fill="#0f1b12" stroke="#7ee787" stroke-opacity="0.35"/>
   <text x="38" y="48" fill="#7ee787" font-weight="700" font-size="14">exec/ — VECTORIZED EXECUTION ENGINE</text>
   <text x="38" y="66" fill="#8b949e" font-size="12">process ~1024 values per batch in tight typed loops; zero allocs in hot path</text>
@@ -235,167 +236,190 @@
   <path d="M 180 200 Q 200 215 450 220" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
   <text x="240" y="234" fill="#58a6ff" font-size="12">wraps via Operator iface</text>
 
+  <!-- ProjectOp (row 3 left) -->
+  <g>
+    <rect x="60" y="310" width="460" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
+    <text x="290" y="335" text-anchor="middle" fill="#7ee787" font-weight="700">ProjectOp</text>
+    <line x1="72" y1="344" x2="508" y2="344" stroke="#30363d"/>
+    <text x="72" y="362" fill="#c9d1d9">+ Next() (*Batch, bool)</text>
+    <text x="72" y="376" fill="#c9d1d9" font-size="12">drops / reorders columns — Sel unchanged, Vectors pointer-aliased</text>
+  </g>
+
+  <!-- Pipeline hint: Scan → Filter → Project -->
+  <g>
+    <rect x="550" y="310" width="590" height="70" rx="6"
+          fill="#0d1c15" stroke="#7ee787" stroke-opacity="0.55" stroke-dasharray="4 3"/>
+    <text x="845" y="335" text-anchor="middle" fill="#7ee787" font-weight="700" font-style="italic">canonical pipeline</text>
+    <line x1="562" y1="344" x2="1128" y2="344" stroke="#30363d"/>
+    <text x="845" y="362" text-anchor="middle" fill="#c9d1d9">ScanOp → FilterOp → ProjectOp → consumer</text>
+    <text x="845" y="376" text-anchor="middle" fill="#8b949e" font-size="12">each wraps the next via the Operator interface</text>
+  </g>
+
+  <!-- FilterOp → ProjectOp (wraps as child) -->
+  <path d="M 670 290 Q 650 300 500 310" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
+  <text x="560" y="306" fill="#58a6ff" font-size="12">wraps</text>
+
   <!-- ============================== -->
   <!-- LAYER 2: STORAGE (in-memory)   -->
   <!-- ============================== -->
-  <rect x="20" y="340" width="1160" height="340" rx="10"
+  <rect x="20" y="430" width="1160" height="340" rx="10"
         fill="#1c1610" stroke="#ffa657" stroke-opacity="0.35"/>
-  <text x="38" y="368" fill="#ffa657" font-weight="700" font-size="14">storage/ — IN-MEMORY COLUMNAR TYPES</text>
-  <text x="38" y="386" fill="#8b949e" font-size="12">typed contiguous arrays + null bitmaps + row-group containers</text>
+  <text x="38" y="458" fill="#ffa657" font-weight="700" font-size="14">storage/ — IN-MEMORY COLUMNAR TYPES</text>
+  <text x="38" y="476" fill="#8b949e" font-size="12">typed contiguous arrays + null bitmaps + row-group containers</text>
 
   <!-- RowGroup -->
   <g>
-    <rect x="60" y="410" width="260" height="100" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="190" y="435" text-anchor="middle" fill="#ffa657" font-weight="700">RowGroup</text>
-    <line x1="72" y1="444" x2="308" y2="444" stroke="#30363d"/>
-    <text x="72" y="468" fill="#c9d1d9">Columns []*ColumnChunk</text>
-    <text x="72" y="490" fill="#c9d1d9">RowCount int</text>
+    <rect x="60" y="500" width="260" height="100" rx="6" fill="#241a10" stroke="#ffa657"/>
+    <text x="190" y="525" text-anchor="middle" fill="#ffa657" font-weight="700">RowGroup</text>
+    <line x1="72" y1="534" x2="308" y2="534" stroke="#30363d"/>
+    <text x="72" y="558" fill="#c9d1d9">Columns []*ColumnChunk</text>
+    <text x="72" y="580" fill="#c9d1d9">RowCount int</text>
   </g>
 
   <!-- ColumnChunk -->
   <g>
-    <rect x="420" y="410" width="260" height="140" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="550" y="435" text-anchor="middle" fill="#ffa657" font-weight="700">ColumnChunk</text>
-    <line x1="432" y1="444" x2="668" y2="444" stroke="#30363d"/>
-    <text x="432" y="466" fill="#c9d1d9">Name string</text>
-    <text x="432" y="486" fill="#c9d1d9">ColType ColumnType</text>
-    <text x="432" y="506" fill="#c9d1d9">Values Column</text>
-    <text x="432" y="526" fill="#c9d1d9">Nulls *NullBitmap</text>
+    <rect x="420" y="500" width="260" height="140" rx="6" fill="#241a10" stroke="#ffa657"/>
+    <text x="550" y="525" text-anchor="middle" fill="#ffa657" font-weight="700">ColumnChunk</text>
+    <line x1="432" y1="534" x2="668" y2="534" stroke="#30363d"/>
+    <text x="432" y="556" fill="#c9d1d9">Name string</text>
+    <text x="432" y="576" fill="#c9d1d9">ColType ColumnType</text>
+    <text x="432" y="596" fill="#c9d1d9">Values Column</text>
+    <text x="432" y="616" fill="#c9d1d9">Nulls *NullBitmap</text>
   </g>
 
   <!-- Column interface -->
   <g>
-    <rect x="800" y="410" width="340" height="100" rx="6"
+    <rect x="800" y="500" width="340" height="100" rx="6"
           fill="#241a10" stroke="#f0883e" stroke-dasharray="4 3"/>
-    <text x="970" y="435" text-anchor="middle" fill="#f0883e" font-weight="700" font-style="italic">«interface» Column</text>
-    <line x1="812" y1="444" x2="1128" y2="444" stroke="#30363d"/>
-    <text x="812" y="468" fill="#c9d1d9">Type() ColumnType</text>
-    <text x="812" y="490" fill="#c9d1d9">Len() int</text>
+    <text x="970" y="525" text-anchor="middle" fill="#f0883e" font-weight="700" font-style="italic">«interface» Column</text>
+    <line x1="812" y1="534" x2="1128" y2="534" stroke="#30363d"/>
+    <text x="812" y="558" fill="#c9d1d9">Type() ColumnType</text>
+    <text x="812" y="580" fill="#c9d1d9">Len() int</text>
   </g>
 
   <!-- Typed columns -->
   <g>
-    <rect x="800" y="550" width="78" height="90" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="839" y="580" text-anchor="middle" fill="#ffa657" font-weight="700">Int64</text>
-    <text x="839" y="598" text-anchor="middle" fill="#ffa657" font-weight="700">Column</text>
-    <text x="839" y="624" text-anchor="middle" fill="#c9d1d9">[]int64</text>
+    <rect x="800" y="640" width="78" height="90" rx="6" fill="#241a10" stroke="#ffa657"/>
+    <text x="839" y="670" text-anchor="middle" fill="#ffa657" font-weight="700">Int64</text>
+    <text x="839" y="688" text-anchor="middle" fill="#ffa657" font-weight="700">Column</text>
+    <text x="839" y="714" text-anchor="middle" fill="#c9d1d9">[]int64</text>
 
-    <rect x="888" y="550" width="86" height="90" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="931" y="580" text-anchor="middle" fill="#ffa657" font-weight="700">Float64</text>
-    <text x="931" y="598" text-anchor="middle" fill="#ffa657" font-weight="700">Column</text>
-    <text x="931" y="624" text-anchor="middle" fill="#c9d1d9">[]float64</text>
+    <rect x="888" y="640" width="86" height="90" rx="6" fill="#241a10" stroke="#ffa657"/>
+    <text x="931" y="670" text-anchor="middle" fill="#ffa657" font-weight="700">Float64</text>
+    <text x="931" y="688" text-anchor="middle" fill="#ffa657" font-weight="700">Column</text>
+    <text x="931" y="714" text-anchor="middle" fill="#c9d1d9">[]float64</text>
 
-    <rect x="984" y="550" width="78" height="90" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="1023" y="580" text-anchor="middle" fill="#ffa657" font-weight="700">String</text>
-    <text x="1023" y="598" text-anchor="middle" fill="#ffa657" font-weight="700">Column</text>
-    <text x="1023" y="624" text-anchor="middle" fill="#c9d1d9">[]string</text>
+    <rect x="984" y="640" width="78" height="90" rx="6" fill="#241a10" stroke="#ffa657"/>
+    <text x="1023" y="670" text-anchor="middle" fill="#ffa657" font-weight="700">String</text>
+    <text x="1023" y="688" text-anchor="middle" fill="#ffa657" font-weight="700">Column</text>
+    <text x="1023" y="714" text-anchor="middle" fill="#c9d1d9">[]string</text>
 
-    <rect x="1072" y="550" width="68" height="90" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="1106" y="580" text-anchor="middle" fill="#ffa657" font-weight="700">Bool</text>
-    <text x="1106" y="598" text-anchor="middle" fill="#ffa657" font-weight="700">Column</text>
-    <text x="1106" y="624" text-anchor="middle" fill="#c9d1d9">[]bool</text>
+    <rect x="1072" y="640" width="68" height="90" rx="6" fill="#241a10" stroke="#ffa657"/>
+    <text x="1106" y="670" text-anchor="middle" fill="#ffa657" font-weight="700">Bool</text>
+    <text x="1106" y="688" text-anchor="middle" fill="#ffa657" font-weight="700">Column</text>
+    <text x="1106" y="714" text-anchor="middle" fill="#c9d1d9">[]bool</text>
   </g>
 
   <!-- NullBitmap -->
   <g>
-    <rect x="60" y="550" width="260" height="110" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="190" y="574" text-anchor="middle" fill="#ffa657" font-weight="700">NullBitmap</text>
-    <line x1="72" y1="584" x2="308" y2="584" stroke="#30363d"/>
-    <text x="72" y="608" fill="#c9d1d9">data []byte (bit-packed)</text>
-    <text x="72" y="630" fill="#c9d1d9">+ SetNull / IsNull / Reset</text>
+    <rect x="60" y="640" width="260" height="110" rx="6" fill="#241a10" stroke="#ffa657"/>
+    <text x="190" y="664" text-anchor="middle" fill="#ffa657" font-weight="700">NullBitmap</text>
+    <line x1="72" y1="674" x2="308" y2="674" stroke="#30363d"/>
+    <text x="72" y="698" fill="#c9d1d9">data []byte (bit-packed)</text>
+    <text x="72" y="720" fill="#c9d1d9">+ SetNull / IsNull / Reset</text>
   </g>
 
   <!-- storage edges -->
   <!-- RowGroup contains ColumnChunk -->
-  <line x1="320" y1="460" x2="420" y2="460" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="370" y="452" text-anchor="middle" fill="#58a6ff" font-size="12">contains</text>
+  <line x1="320" y1="550" x2="420" y2="550" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="370" y="542" text-anchor="middle" fill="#58a6ff" font-size="12">contains</text>
 
   <!-- ColumnChunk → Column (field) -->
-  <line x1="680" y1="490" x2="800" y2="480" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="740" y="475" text-anchor="middle" fill="#58a6ff" font-size="12">Values</text>
+  <line x1="680" y1="580" x2="800" y2="570" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="740" y="565" text-anchor="middle" fill="#58a6ff" font-size="12">Values</text>
 
   <!-- ColumnChunk → NullBitmap (curve) -->
-  <path d="M 420 520 Q 310 535 320 575" fill="none" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="345" y="528" text-anchor="middle" fill="#58a6ff" font-size="12">Nulls</text>
+  <path d="M 420 610 Q 310 625 320 665" fill="none" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="345" y="618" text-anchor="middle" fill="#58a6ff" font-size="12">Nulls</text>
 
   <!-- Column interface implemented by typed columns -->
-  <line x1="839" y1="550" x2="860" y2="510" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#implArrow)"/>
-  <line x1="931" y1="550" x2="935" y2="510" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#implArrow)"/>
-  <line x1="1023" y1="550" x2="1015" y2="510" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#implArrow)"/>
-  <line x1="1106" y1="550" x2="1090" y2="510" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#implArrow)"/>
-  <text x="1150" y="532" fill="#f0883e" font-size="12" font-style="italic">implements</text>
+  <line x1="839" y1="640" x2="860" y2="600" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#implArrow)"/>
+  <line x1="931" y1="640" x2="935" y2="600" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#implArrow)"/>
+  <line x1="1023" y1="640" x2="1015" y2="600" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#implArrow)"/>
+  <line x1="1106" y1="640" x2="1090" y2="600" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#implArrow)"/>
+  <text x="1150" y="622" fill="#f0883e" font-size="12" font-style="italic">implements</text>
 
   <!-- Vector wraps Column + NullBitmap — cross-layer arrows (dashed blue) -->
-  <!-- from Vector (exec layer, y~200) down to Column iface (y~410) -->
-  <line x1="960" y1="200" x2="960" y2="410" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="970" y="335" fill="#58a6ff" font-size="12">wraps</text>
+  <!-- from Vector (exec layer, y~200) down to Column iface (y~500) -->
+  <line x1="960" y1="200" x2="960" y2="500" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
+  <text x="970" y="395" fill="#58a6ff" font-size="12">wraps</text>
   <!-- from Vector down to NullBitmap -->
-  <path d="M 830 200 Q 500 330 260 550" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="470" y="355" fill="#58a6ff" font-size="12">+ NullBitmap</text>
+  <path d="M 830 200 Q 500 420 260 640" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
+  <text x="470" y="430" fill="#58a6ff" font-size="12">+ NullBitmap</text>
 
   <!-- ScanOp reads from RowGroup — cross-layer -->
-  <path d="M 150 200 Q 100 340 150 410" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="58" y="350" fill="#58a6ff" font-size="12">reads</text>
+  <path d="M 150 200 Q 100 430 150 500" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
+  <text x="58" y="430" fill="#58a6ff" font-size="12">reads</text>
 
   <!-- ============================== -->
   <!-- LAYER 3: PERSISTENCE           -->
   <!-- ============================== -->
-  <rect x="20" y="710" width="1160" height="230" rx="10"
+  <rect x="20" y="800" width="1160" height="230" rx="10"
         fill="#0d1824" stroke="#79c0ff" stroke-opacity="0.35"/>
-  <text x="38" y="738" fill="#79c0ff" font-weight="700" font-size="14">storage/ (writer+reader) &amp; encoding/ — PERSISTENCE</text>
-  <text x="38" y="756" fill="#8b949e" font-size="12">in-memory RowGroup ⇄ .cldb file via typed encodings and LZ4 compression</text>
+  <text x="38" y="828" fill="#79c0ff" font-weight="700" font-size="14">storage/ (writer+reader) &amp; encoding/ — PERSISTENCE</text>
+  <text x="38" y="846" fill="#8b949e" font-size="12">in-memory RowGroup ⇄ .cldb file via typed encodings and LZ4 compression</text>
 
   <!-- Writer -->
   <g>
-    <rect x="60" y="780" width="220" height="120" rx="6" fill="#121e2c" stroke="#79c0ff"/>
-    <text x="170" y="804" text-anchor="middle" fill="#79c0ff" font-weight="700">SingleFileWriter</text>
-    <line x1="72" y1="814" x2="268" y2="814" stroke="#30363d"/>
-    <text x="72" y="840" fill="#c9d1d9">+ WriteRowGroup(rg)</text>
-    <text x="72" y="862" fill="#c9d1d9">+ Close()</text>
+    <rect x="60" y="870" width="220" height="120" rx="6" fill="#121e2c" stroke="#79c0ff"/>
+    <text x="170" y="894" text-anchor="middle" fill="#79c0ff" font-weight="700">SingleFileWriter</text>
+    <line x1="72" y1="904" x2="268" y2="904" stroke="#30363d"/>
+    <text x="72" y="930" fill="#c9d1d9">+ WriteRowGroup(rg)</text>
+    <text x="72" y="952" fill="#c9d1d9">+ Close()</text>
   </g>
 
   <!-- Encoding -->
   <g>
-    <rect x="330" y="780" width="300" height="120" rx="6"
+    <rect x="330" y="870" width="300" height="120" rx="6"
           fill="#1c142a" stroke="#d2a8ff"/>
-    <text x="480" y="804" text-anchor="middle" fill="#d2a8ff" font-weight="700">encoding/ · «interface» Encoder</text>
-    <line x1="342" y1="814" x2="618" y2="814" stroke="#30363d"/>
-    <text x="342" y="836" fill="#c9d1d9">PlainEncoder</text>
-    <text x="342" y="856" fill="#c9d1d9">RLEEncoder</text>
-    <text x="342" y="876" fill="#c9d1d9">DictEncoder</text>
-    <text x="342" y="896" fill="#c9d1d9">DeltaEncoder</text>
+    <text x="480" y="894" text-anchor="middle" fill="#d2a8ff" font-weight="700">encoding/ · «interface» Encoder</text>
+    <line x1="342" y1="904" x2="618" y2="904" stroke="#30363d"/>
+    <text x="342" y="926" fill="#c9d1d9">PlainEncoder</text>
+    <text x="342" y="946" fill="#c9d1d9">RLEEncoder</text>
+    <text x="342" y="966" fill="#c9d1d9">DictEncoder</text>
+    <text x="342" y="986" fill="#c9d1d9">DeltaEncoder</text>
   </g>
 
   <!-- LZ4 -->
   <g>
-    <rect x="680" y="780" width="200" height="120" rx="6"
+    <rect x="680" y="870" width="200" height="120" rx="6"
           fill="#1c142a" stroke="#d2a8ff"/>
-    <text x="780" y="804" text-anchor="middle" fill="#d2a8ff" font-weight="700">LZ4Compressor</text>
-    <line x1="692" y1="814" x2="868" y2="814" stroke="#30363d"/>
-    <text x="692" y="840" fill="#c9d1d9">+ Compress(b)</text>
-    <text x="692" y="862" fill="#c9d1d9">+ Decompress(b)</text>
+    <text x="780" y="894" text-anchor="middle" fill="#d2a8ff" font-weight="700">LZ4Compressor</text>
+    <line x1="692" y1="904" x2="868" y2="904" stroke="#30363d"/>
+    <text x="692" y="930" fill="#c9d1d9">+ Compress(b)</text>
+    <text x="692" y="952" fill="#c9d1d9">+ Decompress(b)</text>
   </g>
 
   <!-- Reader -->
   <g>
-    <rect x="930" y="780" width="210" height="120" rx="6" fill="#121e2c" stroke="#79c0ff"/>
-    <text x="1035" y="804" text-anchor="middle" fill="#79c0ff" font-weight="700">SingleFileReader</text>
-    <line x1="942" y1="814" x2="1128" y2="814" stroke="#30363d"/>
-    <text x="942" y="840" fill="#c9d1d9">+ Open(path)</text>
-    <text x="942" y="862" fill="#c9d1d9">+ ReadRowGroup(i)</text>
+    <rect x="930" y="870" width="210" height="120" rx="6" fill="#121e2c" stroke="#79c0ff"/>
+    <text x="1035" y="894" text-anchor="middle" fill="#79c0ff" font-weight="700">SingleFileReader</text>
+    <line x1="942" y1="904" x2="1128" y2="904" stroke="#30363d"/>
+    <text x="942" y="930" fill="#c9d1d9">+ Open(path)</text>
+    <text x="942" y="952" fill="#c9d1d9">+ ReadRowGroup(i)</text>
   </g>
 
   <!-- persistence edges: writer → encoder → lz4 → disk, disk → lz4 → encoder → reader -->
-  <line x1="280" y1="840" x2="330" y2="840" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="630" y1="840" x2="680" y2="840" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="880" y1="840" x2="930" y2="840" stroke="#58a6ff" stroke-width="2" marker-start="url(#arrow)"/>
+  <line x1="280" y1="930" x2="330" y2="930" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="630" y1="930" x2="680" y2="930" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="880" y1="930" x2="930" y2="930" stroke="#58a6ff" stroke-width="2" marker-start="url(#arrow)"/>
 
   <!-- writer up to RowGroup, reader up to RowGroup -->
-  <path d="M 170 780 Q 180 720 190 680" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="110" y="750" fill="#58a6ff" font-size="12">from RowGroup</text>
+  <path d="M 170 870 Q 180 810 190 770" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
+  <text x="110" y="840" fill="#58a6ff" font-size="12">from RowGroup</text>
 
-  <path d="M 1035 780 Q 1020 720 1000 680" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="1045" y="750" fill="#58a6ff" font-size="12">to RowGroup</text>
+  <path d="M 1035 870 Q 1020 810 1000 770" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
+  <text x="1045" y="840" fill="#58a6ff" font-size="12">to RowGroup</text>
 
 </svg>
 
@@ -424,6 +448,11 @@
         <td class="pkg-exec"><code>FilterOp</code></td>
         <td>Wraps a child <code>Operator</code> and narrows each batch's <code>Sel</code> using a <code>Predicate</code>. Vectors are never copied, mutated, or resized — only the selection changes (late materialization). Fully-filtered batches are silently skipped. Uses an O(1) pointer swap between a scratch selection and <code>Batch.Sel</code> instead of a copy. Zero allocations in steady state.</td>
         <td><code>exec/filter.go</code></td>
+      </tr>
+      <tr>
+        <td class="pkg-exec"><code>ProjectOp</code></td>
+        <td>Wraps a child <code>Operator</code> and drops/reorders columns by pointer-aliasing a subset of the child's Vectors into a reused output Batch. Selection passes through by reference — dropping columns never changes which rows are alive. Supports arbitrary reordering and duplicate columns. Zero copy, zero allocation. When Project sits directly above Scan, push the narrower column list into <code>NewScanOp</code> instead to avoid decoding dropped columns at all.</td>
+        <td><code>exec/project.go</code></td>
       </tr>
       <tr>
         <td class="pkg-exec"><code>Predicate</code> (interface)</td>
@@ -501,7 +530,8 @@
       <li><code>NewScanOp(rg, []string{…})</code> allocates one output <code>Batch</code> of pre-sized <code>Vector</code>s (one per requested column).</li>
       <li>On each <code>Next()</code>: <code>Batch.Reset()</code> <span class="arrow">→</span> <code>Vector.CopyFromChunk(chunk, offset, n)</code> does one typed memmove per column per batch <span class="arrow">→</span> returns the reused <code>*Batch</code>.</li>
       <li><code>FilterOp</code>.Next <span class="arrow">→</span> pull from child, evaluate <code>Predicate.Eval</code> against one column, swap <code>Batch.Sel</code> with the narrowed scratch selection. Vectors are never touched. Fully-filtered batches are silently skipped.</li>
-      <li><em>(Coming in Phase 3 Steps 5–6)</em> <code>ProjectOp</code>.Next <span class="arrow">→</span> drop unused columns from the output batch <span class="arrow">→</span> consumer. Then: end-to-end pipeline benchmark validating the zero-alloc / ≥5× speedup target.</li>
+      <li><code>ProjectOp</code>.Next <span class="arrow">→</span> pull from child, re-bind the reused output batch's <code>Vectors</code> slice to point at the requested subset of the child's vectors, share <code>Sel</code> by reference, return. No data touched.</li>
+      <li><em>(Coming in Phase 3 Step 6)</em> end-to-end pipeline benchmark over <code>Scan → Filter → Project</code> validating the zero-alloc / ≥5× speedup target.</li>
     </ol>
   </div>
 
