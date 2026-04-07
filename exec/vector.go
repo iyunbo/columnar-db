@@ -188,8 +188,12 @@ func (v *Vector) AppendBool(b bool) error {
 // into this (empty, just-Reset) vector. The vector type must match the
 // chunk type and n must be ≤ VectorSize. This is the hot path used by the
 // Scan operator: one typed memmove per column per batch, no per-row interface
-// calls. Caller must ensure the vector is empty — CopyFromChunk does not
-// check (it would defeat the zero-overhead guarantee).
+// calls.
+//
+// Semantics: writes are absolute, not appending. length is set to n (not
+// incremented), so calling this on a non-empty vector will desync length
+// from the underlying Values slice. Always Reset() first — ScanOp does this
+// via Batch.Reset() at the top of every Next().
 func (v *Vector) CopyFromChunk(chunk *storage.ColumnChunk, start, n int) error {
 	if v.Type != chunk.ColType {
 		return fmt.Errorf("exec: CopyFromChunk type mismatch: vector %s, chunk %s", v.Type, chunk.ColType)

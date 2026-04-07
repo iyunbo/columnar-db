@@ -297,6 +297,69 @@ func TestScanZeroAllocPerBatch(t *testing.T) {
 	}
 }
 
+func TestScanAllNullsAcrossBatchBoundary(t *testing.T) {
+	// Every row is null, and we span a batch boundary. Exercises the null
+	// copy path for a non-trivial range at non-zero start offset.
+	const n = 2000
+	nullIdx := make([]int, n)
+	for i := range n {
+		nullIdx[i] = i
+	}
+	rg := makeIntRowGroup(t, n, nullIdx...)
+	scan, _ := NewScanOp(rg, []string{"x"})
+
+	absRow := 0
+	for {
+		b, ok := scan.Next()
+		if !ok {
+			break
+		}
+		v := b.Vectors[0]
+		for i := 0; i < v.Len(); i++ {
+			if !v.IsNull(i) {
+				t.Fatalf("row %d (batch-local %d) not null", absRow, i)
+			}
+			absRow++
+		}
+	}
+	if absRow != n {
+		t.Errorf("scanned %d rows, want %d", absRow, n)
+	}
+}
+
+func TestScanResetMidDrain(t *testing.T) {
+	// Calling Reset before exhaustion must still rewind cleanly.
+	rg := makeIntRowGroup(t, 2500)
+	scan, _ := NewScanOp(rg, []string{"x"})
+
+	// Consume one batch, then reset before exhaustion.
+	if _, ok := scan.Next(); !ok {
+		t.Fatal("expected first batch")
+	}
+	scan.Reset()
+	if scan.RowsEmitted() != 0 {
+		t.Fatalf("RowsEmitted after mid-drain Reset = %d", scan.RowsEmitted())
+	}
+
+	// Full drain should now see all 2500 rows starting from 0.
+	absRow := 0
+	for {
+		b, ok := scan.Next()
+		if !ok {
+			break
+		}
+		for i, v := range b.Vectors[0].Int64s() {
+			if v != int64(absRow+i) {
+				t.Fatalf("row %d: got %d, want %d", absRow+i, v, absRow+i)
+			}
+		}
+		absRow += b.Len()
+	}
+	if absRow != 2500 {
+		t.Errorf("total after mid-drain Reset = %d, want 2500", absRow)
+	}
+}
+
 func TestScanAllTypes(t *testing.T) {
 	n := 10
 	ints := make([]int64, n)

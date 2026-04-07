@@ -78,10 +78,7 @@ func (s *ScanOp) Next() (*Batch, bool) {
 	if remaining <= 0 {
 		return nil, false
 	}
-	n := remaining
-	if n > VectorSize {
-		n = VectorSize
-	}
+	n := min(remaining, VectorSize)
 
 	s.batch.Reset()
 	for i, chunk := range s.srcChunks {
