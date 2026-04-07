@@ -223,7 +223,7 @@ func TestDeltaEncoder_WrongTypeErrors(t *testing.T) {
 
 	tests := []struct {
 		name string
-		data interface{}
+		data any
 	}{
 		{"float64", []float64{1.0, 2.0}},
 		{"string", []string{"a", "b"}},
@@ -289,8 +289,7 @@ func BenchmarkDeltaEncode_1M(b *testing.B) {
 	}
 	enc := NewDeltaEncoder()
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = enc.Encode(data)
 	}
 }
@@ -304,8 +303,7 @@ func BenchmarkDeltaDecode_1M(b *testing.B) {
 	enc := NewDeltaEncoder()
 	encoded, _ := enc.Encode(data)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = DeltaDecodeInt64(encoded, n)
 	}
 }

@@ -49,12 +49,12 @@ func (t EncodingType) String() string {
 type Encoder interface {
 	// Encode serializes a typed slice to bytes.
 	// data must be one of: []int64, []float64, []string, []bool.
-	Encode(data interface{}) ([]byte, error)
+	Encode(data any) ([]byte, error)
 
 	// Decode deserializes bytes back into a typed slice.
 	// count is the number of values to decode.
 	// Returns the same concrete type that was passed to Encode.
-	Decode(encoded []byte, count int) (interface{}, error)
+	Decode(encoded []byte, count int) (any, error)
 
 	// Type returns which encoding scheme this encoder implements.
 	Type() EncodingType

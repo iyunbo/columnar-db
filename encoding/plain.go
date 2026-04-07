@@ -27,7 +27,7 @@ func NewPlainEncoder() *PlainEncoder {
 func (e *PlainEncoder) Type() EncodingType { return Plain }
 
 // Encode serializes a typed slice to bytes using plain encoding.
-func (e *PlainEncoder) Encode(data interface{}) ([]byte, error) {
+func (e *PlainEncoder) Encode(data any) ([]byte, error) {
 	switch v := data.(type) {
 	case []int64:
 		return encodeInt64(v), nil
@@ -45,7 +45,7 @@ func (e *PlainEncoder) Encode(data interface{}) ([]byte, error) {
 // Decode deserializes bytes back into a typed slice.
 // The caller must know the original type and pass the correct count.
 // Use DecodeInt64, DecodeFloat64, etc. if you know the type at compile time.
-func (e *PlainEncoder) Decode(encoded []byte, count int) (interface{}, error) {
+func (e *PlainEncoder) Decode(encoded []byte, count int) (any, error) {
 	// Plain decoder needs type information — but the Encoder interface
 	// doesn't carry it. We try to detect based on context, but in practice
 	// callers should use the typed decode methods directly.
@@ -126,7 +126,7 @@ func DecodeString(encoded []byte, count int) ([]string, error) {
 	result := make([]string, 0, count)
 	offset := 0
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		if offset+4 > len(encoded) {
 			return nil, fmt.Errorf("decode string: unexpected end of data at value %d (need length header at offset %d)", i, offset)
 		}

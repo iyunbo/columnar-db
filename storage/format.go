@@ -186,10 +186,10 @@ type ColumnChunkMeta struct {
 	//   TypeFloat64 -> float64
 	//   TypeString  -> string
 	//   TypeBool    -> bool
-	Min interface{}
+	Min any
 
 	// Max is the maximum non-null value, or nil if all values are null.
-	Max interface{}
+	Max any
 }
 
 // TotalRows returns the total number of rows across all row groups.

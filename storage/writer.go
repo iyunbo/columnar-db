@@ -15,10 +15,10 @@ import (
 // before trusting any content.
 //
 // Write order:
-//   1. NewSingleFileWriter — creates file, writes header (magic + version)
-//   2. WriteRowGroup (0..N times) — appends column chunks, records metadata
-//   3. Close — writes footer (schema + row group index + stats + footer length)
-//      + trailing magic, then closes the file
+//  1. NewSingleFileWriter — creates file, writes header (magic + version)
+//  2. WriteRowGroup (0..N times) — appends column chunks, records metadata
+//  3. Close — writes footer (schema + row group index + stats + footer length)
+//     + trailing magic, then closes the file
 type SingleFileWriter struct {
 	file     *os.File
 	metadata FileMetadata
@@ -224,7 +224,7 @@ func (w *SingleFileWriter) writeStringValues(col *StringColumn) error {
 	// Build offset table and concatenated data in one pass.
 	offsets := make([]uint32, numOffsets)
 	var dataLen uint32
-	for i := 0; i < n; i++ {
+	for i := range n {
 		offsets[i] = dataLen
 		dataLen += uint32(len(col.Get(i)))
 	}
@@ -243,7 +243,7 @@ func (w *SingleFileWriter) writeStringValues(col *StringColumn) error {
 	}
 
 	// Write concatenated string bytes.
-	for i := 0; i < n; i++ {
+	for i := range n {
 		s := col.Get(i)
 		if len(s) > 0 {
 			if err := w.writeBytes([]byte(s)); err != nil {
@@ -348,7 +348,7 @@ func (w *SingleFileWriter) writeColumnChunkMeta(meta ColumnChunkMeta) error {
 
 // writeStatValue encodes a min or max value according to its type.
 // The encoding must match what the reader expects for each ColumnType.
-func (w *SingleFileWriter) writeStatValue(v interface{}) error {
+func (w *SingleFileWriter) writeStatValue(v any) error {
 	switch val := v.(type) {
 	case int64:
 		return w.writeInt64(val)

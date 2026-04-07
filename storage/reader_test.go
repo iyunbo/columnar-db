@@ -397,9 +397,9 @@ func TestOpenFileBadVersion(t *testing.T) {
 	// Valid magic, wrong version (99). Include trailer so the header check
 	// is the first failure.
 	data := []byte("CLDB")
-	data = append(data, 0x63, 0x00)               // version 99
-	data = append(data, 0x00, 0x00, 0x00, 0x00)   // footer length 0
-	data = append(data, []byte("CLDB")...)         // trailing magic
+	data = append(data, 0x63, 0x00)             // version 99
+	data = append(data, 0x00, 0x00, 0x00, 0x00) // footer length 0
+	data = append(data, []byte("CLDB")...)      // trailing magic
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestOpenFileBadTrailingMagic(t *testing.T) {
 	// Valid header but bad trailing magic.
 	data := []byte("CLDB\x01\x00")
 	data = append(data, 0x00, 0x00, 0x00, 0x00) // footer length 0
-	data = append(data, []byte("XXXX")...)        // bad trailing magic
+	data = append(data, []byte("XXXX")...)      // bad trailing magic
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestLargeFile(t *testing.T) {
 	namePool := []string{"alice", "bob", "charlie", "diana", "eve", "frank", "grace", "heidi"}
 	csvEstimate := 0
 
-	for i := 0; i < totalRows; i++ {
+	for i := range totalRows {
 		ids[i] = int64(i)
 		prices[i] = float64(rng.Intn(100000)) / 100.0
 		names[i] = namePool[rng.Intn(len(namePool))]
@@ -498,10 +498,7 @@ func TestLargeFile(t *testing.T) {
 
 	// Split into row groups of DefaultRowGroupSize.
 	for start := 0; start < totalRows; start += DefaultRowGroupSize {
-		end := start + DefaultRowGroupSize
-		if end > totalRows {
-			end = totalRows
-		}
+		end := min(start+DefaultRowGroupSize, totalRows)
 
 		rg, err := NewRowGroup(
 			NewColumnChunkNoNulls("id", NewInt64ColumnFromSlice(ids[start:end])),

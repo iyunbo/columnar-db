@@ -6,7 +6,7 @@ import (
 
 func TestColumnChunkInt64(t *testing.T) {
 	col := NewInt64Column()
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		col.Append(int64(i * 2))
 	}
 

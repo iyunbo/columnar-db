@@ -12,7 +12,7 @@ func makeTestRowGroup(t *testing.T, n int) *RowGroup {
 	cities := NewStringColumn()
 	active := NewBoolColumn()
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		ids.Append(int64(i + 1))
 		prices.Append(float64(i) * 9.99)
 		cities.Append([]string{"Paris", "London", "Tokyo", "Berlin"}[i%4])

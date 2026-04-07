@@ -9,7 +9,7 @@ func TestNullBitmapBasic(t *testing.T) {
 	bm := NewNullBitmap(16)
 
 	// All should be non-null initially
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		if bm.IsNull(i) {
 			t.Fatalf("row %d should not be null initially", i)
 		}
@@ -74,7 +74,7 @@ func TestNullBitmapLargeRandom(t *testing.T) {
 	}
 
 	// Verify all positions
-	for i := 0; i < n; i++ {
+	for i := range n {
 		isNull := bm.IsNull(i)
 		shouldBeNull := expected[i]
 		if isNull != shouldBeNull {

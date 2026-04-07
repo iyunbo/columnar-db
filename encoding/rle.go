@@ -31,7 +31,7 @@ func NewRLEEncoder() *RLEEncoder {
 func (e *RLEEncoder) Type() EncodingType { return RLE }
 
 // Encode serializes a typed slice to bytes using run-length encoding.
-func (e *RLEEncoder) Encode(data interface{}) ([]byte, error) {
+func (e *RLEEncoder) Encode(data any) ([]byte, error) {
 	switch v := data.(type) {
 	case []int64:
 		return rleEncodeInt64(v), nil
@@ -48,7 +48,7 @@ func (e *RLEEncoder) Encode(data interface{}) ([]byte, error) {
 
 // Decode deserializes RLE-encoded bytes back into a typed slice.
 // Like PlainEncoder, callers should use the typed methods directly.
-func (e *RLEEncoder) Decode(encoded []byte, count int) (interface{}, error) {
+func (e *RLEEncoder) Decode(encoded []byte, count int) (any, error) {
 	return nil, fmt.Errorf("rle decode: use typed methods (RLEDecodeInt64, RLEDecodeFloat64, RLEDecodeString, RLEDecodeBool)")
 }
 

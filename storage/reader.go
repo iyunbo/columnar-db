@@ -211,7 +211,7 @@ func (r *SingleFileReader) readFooter(footerLen uint32) error {
 	names := make([]string, numCols)
 	types := make([]ColumnType, numCols)
 
-	for i := 0; i < numCols; i++ {
+	for i := range numCols {
 		if pos+2 > len(buf) {
 			return fmt.Errorf("footer too short for column %d name_len", i)
 		}
@@ -238,7 +238,7 @@ func (r *SingleFileReader) readFooter(footerLen uint32) error {
 
 	r.metadata.RowGroups = make([]RowGroupMeta, numRGs)
 
-	for rg := 0; rg < numRGs; rg++ {
+	for rg := range numRGs {
 		if pos+4 > len(buf) {
 			return fmt.Errorf("footer too short for row group %d row_count", rg)
 		}
@@ -250,7 +250,7 @@ func (r *SingleFileReader) readFooter(footerLen uint32) error {
 			Columns:  make([]ColumnChunkMeta, numCols),
 		}
 
-		for col := 0; col < numCols; col++ {
+		for col := range numCols {
 			colMeta, n, err := r.parseColumnChunkMeta(buf[pos:], types[col])
 			if err != nil {
 				return fmt.Errorf("parse column %d meta in row group %d: %w", col, rg, err)
@@ -323,7 +323,7 @@ func (r *SingleFileReader) parseColumnChunkMeta(buf []byte, colType ColumnType) 
 
 // parseStatValue reads a min/max stat value from buf based on the column type.
 // Returns the value and bytes consumed.
-func (r *SingleFileReader) parseStatValue(buf []byte, colType ColumnType) (interface{}, int, error) {
+func (r *SingleFileReader) parseStatValue(buf []byte, colType ColumnType) (any, int, error) {
 	switch colType {
 	case TypeInt64:
 		if len(buf) < 8 {
@@ -390,7 +390,7 @@ func decodeInt64Values(data []byte, rowCount int) (*Int64Column, error) {
 	}
 
 	col := NewInt64Column()
-	for i := 0; i < rowCount; i++ {
+	for i := range rowCount {
 		v := int64(binary.LittleEndian.Uint64(data[i*8:]))
 		col.Append(v)
 	}
@@ -405,7 +405,7 @@ func decodeFloat64Values(data []byte, rowCount int) (*Float64Column, error) {
 	}
 
 	col := NewFloat64Column()
-	for i := 0; i < rowCount; i++ {
+	for i := range rowCount {
 		bits := binary.LittleEndian.Uint64(data[i*8:])
 		col.Append(math.Float64frombits(bits))
 	}
@@ -419,7 +419,7 @@ func decodeBoolValues(data []byte, rowCount int) (*BoolColumn, error) {
 	}
 
 	col := NewBoolColumn()
-	for i := 0; i < rowCount; i++ {
+	for i := range rowCount {
 		col.Append(data[i] != 0)
 	}
 	return col, nil
@@ -445,7 +445,7 @@ func decodeStringValues(data []byte, rowCount int) (*StringColumn, error) {
 	}
 
 	offsets := make([]uint32, numOffsets)
-	for i := 0; i < numOffsets; i++ {
+	for i := range numOffsets {
 		offsets[i] = binary.LittleEndian.Uint32(data[4+i*4:])
 	}
 
@@ -453,7 +453,7 @@ func decodeStringValues(data []byte, rowCount int) (*StringColumn, error) {
 	stringData := data[offsetTableSize:]
 
 	col := NewStringColumn()
-	for i := 0; i < rowCount; i++ {
+	for i := range rowCount {
 		start := offsets[i]
 		end := offsets[i+1]
 		if start > end || int(end) > len(stringData) {
