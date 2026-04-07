@@ -120,11 +120,13 @@
 
   <h1>columnar-db — Architecture</h1>
   <p class="subtitle">
-    Static snapshot of the codebase as of Phase 3 Step 5 complete
+    Static snapshot of the codebase as of Phase 4 Step 1
     (<code>main</code>, exec package has the <code>Operator</code> interface +
     <code>ScanOp</code>, <code>FilterOp</code>, <code>ProjectOp</code>,
     <code>Vector</code>, <code>Batch</code>, <code>Selection</code>,
-    <code>Predicate</code>).
+    <code>Predicate</code>; Phase 4 has added the <code>Aggregator</code>
+    interface and the <code>AggregateOp</code> operator stub —
+    implementation lands in Steps 2–5).
   </p>
 
   <h2>Layered View</h2>
@@ -245,15 +247,28 @@
     <text x="72" y="376" fill="#c9d1d9" font-size="12">drops / reorders columns — Sel unchanged, Vectors pointer-aliased</text>
   </g>
 
-  <!-- Pipeline hint: Scan → Filter → Project -->
+  <!-- AggregateOp (Phase 4 Step 1 stub) -->
   <g>
-    <rect x="550" y="310" width="590" height="70" rx="6"
-          fill="#0d1c15" stroke="#7ee787" stroke-opacity="0.55" stroke-dasharray="4 3"/>
-    <text x="845" y="335" text-anchor="middle" fill="#7ee787" font-weight="700" font-style="italic">canonical pipeline</text>
-    <line x1="562" y1="344" x2="1128" y2="344" stroke="#30363d"/>
-    <text x="845" y="362" text-anchor="middle" fill="#c9d1d9">ScanOp → FilterOp → ProjectOp → consumer</text>
-    <text x="845" y="376" text-anchor="middle" fill="#8b949e" font-size="12">each wraps the next via the Operator interface</text>
+    <rect x="550" y="310" width="280" height="70" rx="6" fill="#162418" stroke="#7ee787" stroke-dasharray="3 2"/>
+    <text x="690" y="335" text-anchor="middle" fill="#7ee787" font-weight="700">AggregateOp <tspan font-size="11" fill="#8b949e">(stub)</tspan></text>
+    <line x1="562" y1="344" x2="818" y2="344" stroke="#30363d"/>
+    <text x="562" y="362" fill="#c9d1d9" font-size="12">scalar aggregation, no GROUP BY</text>
+    <text x="562" y="376" fill="#c9d1d9" font-size="12">child Operator + []Aggregator</text>
   </g>
+
+  <!-- Aggregator interface (row 3 right) -->
+  <g>
+    <rect x="860" y="310" width="280" height="70" rx="6"
+          fill="#162418" stroke="#f0883e" stroke-dasharray="4 3"/>
+    <text x="1000" y="335" text-anchor="middle" fill="#f0883e" font-weight="700" font-style="italic">«interface» Aggregator</text>
+    <line x1="872" y1="344" x2="1128" y2="344" stroke="#30363d"/>
+    <text x="872" y="362" fill="#c9d1d9" font-size="12">Init / Update(vec, sel) / Finalize</text>
+    <text x="872" y="376" fill="#c9d1d9" font-size="12">Phase 4: Count/Sum/Min/Max/Avg</text>
+  </g>
+
+  <!-- AggregateOp → Aggregator (uses) -->
+  <line x1="830" y1="345" x2="860" y2="345" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="845" y="338" text-anchor="middle" fill="#58a6ff" font-size="11">uses</text>
 
   <!-- FilterOp → ProjectOp (wraps as child) -->
   <path d="M 670 290 Q 650 300 500 310" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
