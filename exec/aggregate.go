@@ -1,6 +1,10 @@
 package exec
 
-import "github.com/iyunbo/columnar-db/storage"
+import (
+	"fmt"
+
+	"github.com/iyunbo/columnar-db/storage"
+)
 
 // Aggregator is the contract every aggregate function (COUNT, SUM,
 // AVG, MIN, MAX, ...) implements. The shape is **columnar per-group
@@ -75,6 +79,22 @@ type Aggregator interface {
 	Finalize(group int, out *Vector)
 }
 
+// AggregateSpec describes one aggregator instance: which input column
+// it consumes, the aggregator implementation, and the output column
+// name (informational — Batch does not yet carry names; the name lives
+// here for self-documentation and for future use by SQL planning in
+// Phase 5).
+//
+// CountStar ignores the input column entirely (it counts selected
+// rows from sel.Len()), so for CountStar specs the ColIndex must
+// still be a valid index in the child's batch but can be any column.
+// Convention: pass 0.
+type AggregateSpec struct {
+	Name     string // result column name
+	ColIndex int    // input column index in child batches
+	Agg      Aggregator
+}
+
 // AggregateOp is the scalar (non-grouping) aggregation operator. It
 // pulls batches from a child operator, calls Update on each
 // configured Aggregator with groupIDs == nil (so every selected row
@@ -86,24 +106,99 @@ type Aggregator interface {
 //
 //	Scan → Filter → AggregateOp → consumer
 //
-// Phase 4 Step 1: stub only — fields and constructor signature exist
-// so dependent code (the architecture diagram, the Step 2 PRs) can
-// reference the type, but Next/Reset and constructor are not
-// implemented yet.
+// Lifecycle:
 //
-// The implementation lands in Step 3.
+//	op, _ := NewAggregateOp(child, []AggregateSpec{...})
+//	for {
+//	    b, ok := op.Next()
+//	    if !ok { break }
+//	    // b is a 1-row batch with one Vector per spec.
+//	    // For multiple iterations, op.Reset() between drains.
+//	}
 //
-// TODO(Step 3): the output schema (column names + Vector types)
-// must be known at construction so `out *Batch` can be allocated
-// once. Likely shape: NewAggregateOp(child, []namedAggregator) with
-// each aggregator carrying its OutputType().
+// Reset semantics: each aggregator is re-Init'd (which allocates a
+// fresh per-group state slice). This is acceptable per-query overhead;
+// the steady-state hot path (Update inside Next's drain loop) is
+// where the zero-alloc contract matters.
 type AggregateOp struct {
 	child Operator
-	aggs  []Aggregator
+	specs []AggregateSpec
 	// out is the single-row result Batch, allocated once at
-	// construction so steady-state Next() does not allocate.
+	// construction so the result emission step does not allocate.
 	out *Batch
 	// done is true after the first Next() returns the result;
 	// subsequent calls return (nil, false) until Reset.
 	done bool
+}
+
+// NewAggregateOp builds a scalar aggregation operator over child.
+// At least one spec is required.
+func NewAggregateOp(child Operator, specs []AggregateSpec) (*AggregateOp, error) {
+	if len(specs) == 0 {
+		return nil, fmt.Errorf("exec: AggregateOp requires at least one aggregator spec")
+	}
+	out := &Batch{
+		Vectors: make([]*Vector, len(specs)),
+		Sel:     NewSelection(),
+	}
+	for i, s := range specs {
+		if s.Agg == nil {
+			return nil, fmt.Errorf("exec: AggregateSpec[%d] (%q) has nil Aggregator", i, s.Name)
+		}
+		if s.ColIndex < 0 {
+			return nil, fmt.Errorf("exec: AggregateSpec[%d] (%q) has negative ColIndex %d", i, s.Name, s.ColIndex)
+		}
+		out.Vectors[i] = NewVector(s.Agg.OutputType())
+		s.Agg.Init(1)
+	}
+	return &AggregateOp{
+		child: child,
+		specs: specs,
+		out:   out,
+	}, nil
+}
+
+// Next drains all batches from the child, updating every aggregator
+// with each batch's selected rows, then emits a single one-row Batch
+// of finalized results. Subsequent calls return (nil, false) until
+// Reset.
+func (a *AggregateOp) Next() (*Batch, bool) {
+	if a.done {
+		return nil, false
+	}
+	for {
+		b, ok := a.child.Next()
+		if !ok {
+			break
+		}
+		for _, s := range a.specs {
+			vec := b.Vectors[s.ColIndex]
+			s.Agg.Update(vec, b.Sel, nil)
+		}
+	}
+	// Finalize each aggregator into its result vector. The output
+	// vectors were either freshly allocated by NewAggregateOp or
+	// freshly Reset; both leave them empty, so a single AppendInt64/
+	// AppendFloat64/AppendNull from Finalize lands at row 0.
+	for i, s := range a.specs {
+		s.Agg.Finalize(0, a.out.Vectors[i])
+	}
+	a.out.Sel.Reset()
+	a.out.Sel.Add(0)
+	a.done = true
+	return a.out, true
+}
+
+// Reset rewinds the operator: child is reset, output batch is
+// cleared, and every aggregator is re-Init'd to zero its state.
+// Re-Init allocates a fresh state slice (small — 1 group for scalar
+// aggregation). This per-query overhead is acceptable; the
+// steady-state contract is per-batch, not per-query.
+func (a *AggregateOp) Reset() {
+	a.child.Reset()
+	a.out.Reset()
+	for _, s := range a.specs {
+		s.Agg.Init(1)
+	}
+	a.done = false
 }
