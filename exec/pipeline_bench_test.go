@@ -133,6 +133,7 @@ func BenchmarkPipelineVectorizedDrain(b *testing.B) {
 }
 
 // --- Compound predicate benchmarks (Phase 3 polish #2) ---
+// See: docs/phase3-compound-benchmark.md
 //
 // Profiling Phase 3 Step 6 (see docs/phase3-profiling.md) showed the
 // vectorized engine's overhead is dominated by selection-vector

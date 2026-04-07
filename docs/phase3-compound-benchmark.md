@@ -23,8 +23,14 @@ vector, while the naive baseline must evaluate both predicates per row.
 | `30 < age < 60`         |             4.01 ms   |        4.82 ms   |       +3.41 ms  |     +2.06 ms  |
 | `30 < age < 60 ∧ ≠ 45`  |             4.22 ms   |        5.36 ms   |       +0.21 ms  |     +0.55 ms  |
 
-(Apple M4, `go test -bench=Pipeline -run=NONE -benchtime=2s ./exec/`,
-median-ish from a single run.)
+Single run, no `benchstat`, no variance bars — see "Methodology &
+caveats" below for what this lets us claim and what it doesn't.
+
+Reproduction:
+```
+go test -bench='PipelineNaiveCount|PipelineVectorizedDrain' \
+        -run=NONE -benchtime=2s ./exec/
+```
 
 The vectorized engine **never crosses** the naive baseline on this
 workload. At 3 predicates the gap has narrowed from 4.6× (1 predicate)
@@ -39,19 +45,52 @@ added compare), vectorized's per-predicate cost is much smaller
 vectorized engine catches up around 2 predicates and wins at 3+.
 
 **Reality**: naive is **wildly nonlinear** — the jump from 1 → 2
-predicates (+3.41 ms) is much bigger than 2 → 3 (+0.21 ms). That
-1 → 2 cliff is because the single-predicate loop is auto-vectorized
-by the Go compiler / Apple's M4 SIMD, and the second predicate breaks
-the vectorizable shape. Once the loop is already scalar, adding a
-third compare costs essentially nothing — branch prediction and
-register pressure absorb it.
+predicates (+3.41 ms) is much bigger than 2 → 3 (+0.21 ms). My first
+guess was an "auto-SIMD cliff" — that the single-predicate loop was
+auto-vectorized by the Go compiler / NEON, and the second predicate
+broke the vectorizable shape. **That guess was wrong**, and I was
+about to write it down without checking. The reviewer caught it; I
+disassembled both functions before publishing this. The real
+explanation is **branch prediction**.
 
-The vectorized engine has **no such cliff**, but it also gets no SIMD
-help on the single-predicate case (its tight loop materializes a
-selection vector, which is not the shape Go auto-vectorizes). It pays
-a flat ~0.5–2 ms per added filter operator. Marginal costs are lower
-than naive's 1 → 2 jump, but its starting point is so much higher
-that it never catches up on this workload.
+Single-predicate `naiveRowAtATimeCount` compiles its inner predicate
+to a branchless `CSINC` (conditional set-and-increment): the compiler
+sees `if a > 30 { count++ }` as "conditionally add 1 to count" and
+emits no taken/not-taken branch on the data. Inner loop is purely
+scalar arithmetic + bitmap-IsNull bookkeeping, ~15 instructions per
+row, ~6 IPC on M4 → ~0.6 ms for 1 M rows. **This matches the
+measurement exactly and has nothing to do with SIMD.** No `V*` ops,
+no `.16B`/`.2D` operands, no NEON. Just CSINC and IPC.
+
+Compound-predicate `naiveRowAtATimeCountCompound` cannot use CSINC
+because short-circuit evaluation (`a > 30 && a < 60`) requires real
+control flow. The compiler emits two branches (`BGE`, `BLE`). The
+second branch is the killer: filtered to ages 31..89 (the survivors
+of the first branch), the second predicate `< 60` is true for 30/59
+≈ **51 % of inputs — the worst possible case for the branch
+predictor**. Apple M4's branch misprediction penalty is ~14 cycles.
+
+  1,000,000 rows × ~0.5 misprediction × ~14 cycles ≈ 7 M cycles
+  ≈ 1.75 ms additional cost over the branchless baseline
+
+Plus the genuine extra work of the second compare (~0.7 ms),
+plus the loss of CSINC on the *first* branch (which is now part of a
+short-circuit chain with the second), and we land near the +3.4 ms
+observed.
+
+The 2 → 3 step is essentially free for naive (+0.21 ms) because the
+third predicate `≠ 45` over the 31..59 survivors is true for 28/29 ≈
+**97 % of inputs — highly predictable**, near-zero misprediction
+cost. (And the 2 % path costs nothing because the operation it
+guards — `count++` — is itself near-free.)
+
+The vectorized engine has no CSINC on its single-predicate case
+(`Int64Gt.Eval` writes selected indices into an output `[]uint16`,
+which is a side effect that defeats CSINC), so it never had the
+branchless party trick to lose. It pays a flat ~0.5–2 ms per added
+filter operator — marginal costs are *lower* than naive's 1 → 2 jump,
+but its starting point is so much higher that it never catches up on
+this workload.
 
 ## Per-predicate marginal cost
 
@@ -70,6 +109,39 @@ wins as predicates grow" story for pure `int64` compares against an
 in-memory column. The marginal cost difference is small in both
 directions.
 
+## Methodology & caveats
+
+What this benchmark *does* measure:
+
+- A 1 M-row in-memory `int64` column with no nulls.
+- Survivor counting only — no row materialization downstream.
+- A single physical machine (Apple M4, macOS, Go from /usr/local/go),
+  not pinned to a specific Go version in this doc.
+- One `go test -bench=… -benchtime=2s` run per benchmark, not five
+  runs with `benchstat`. Variance is not reported.
+- Numbers were stable enough across the two runs I did during the
+  write-up that I'm comfortable making the **direction** of the
+  conclusion (vectorized never crosses naive on this workload) load-
+  bearing. I am **not** making the absolute ns/op numbers load-
+  bearing.
+
+What this benchmark does **not** prove:
+
+- That vectorization loses on disk-backed scans (untested — Phase 4+).
+- That vectorization loses on string / variadic / function-call
+  predicates (untested — see polish list below).
+- That vectorization loses on aggregate / join workloads (untested).
+- Anything about other Go versions, other CPUs (esp. x86_64), or
+  other branch-predictor implementations.
+
+The auto-SIMD-vs-branch-prediction explanation in the previous
+section is **verified by disassembling both functions** (`go test -c
+-gcflags='-S'`). Both inner loops are pure scalar — no NEON
+instructions. The single-predicate version uses `CSINC`; the compound
+versions use `BGE`/`BLE`. The branch-prediction explanation is the
+mechanism the assembly supports; the SIMD explanation is the
+mechanism it falsifies.
+
 ## Why the profiling doc's prediction was wrong
 
 The prediction in `docs/phase3-profiling.md` said:
@@ -85,12 +157,20 @@ matches that mental model.
 
 The second half — "that's the regime where it pays off" — was
 inferred from the *naive baseline being linear*, which it isn't on
-this workload. The naive baseline is roughly `~SIMD + 3.4 + ε`, not
-`0.6 + 0.6 × n`. Late materialization beats *linear* naive scaling.
-It does not beat *cliff-then-flat* naive scaling.
+this workload. The naive baseline is roughly `~CSINC-fast + 3.4 + ε`,
+not `0.6 + 0.6 × n`. Late materialization beats *linear* naive
+scaling. It does not beat *branchless-then-cliff-then-flat* naive
+scaling driven by branch-predictor behaviour on uniformly-distributed
+data.
 
 I should have benchmarked before claiming. (Same lesson as the
-predicate folklore caught in PR #27.)
+predicate folklore caught in PR #27.) And in this very PR I caught
+myself making a *second* unverified claim on top of the first — I
+initially wrote that the cliff was "auto-SIMD breaking", which the
+reviewer flagged and the disassembly disproved. Two layers of
+"sounds plausible" stacked into one document. The lesson holds: when
+narrating a measurement, the explanatory mechanism is itself a claim
+that needs evidence.
 
 ## Bounded conclusion
 
@@ -142,9 +222,10 @@ workloads it's designed for**, which are not this benchmark:
 
 Two negative results in a row, both honestly reported. The compound
 benchmark falsified the "selection vector reuse will save us"
-prediction from the profiling doc — Go's auto-SIMD cliff makes
-naive's curve so non-monotone that no amount of selection-vector
-reuse closes the gap on `int64` workloads. The architectural case for
+prediction from the profiling doc — naive's branchless-then-branchy
+curve (CSINC for one predicate, mispredicted branches for two) is so
+non-monotone that no amount of selection-vector reuse closes the gap
+on `int64` workloads with branch-predictor-friendly distributions. The architectural case for
 vectorization remains intact (it is not built for this workload), but
 **Phase 3 has not yet produced a benchmark in which the vectorized
 engine wins**. The next step is the string-predicate benchmark

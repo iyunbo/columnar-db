@@ -88,6 +88,7 @@ func naiveRowAtATimeScanFilterProject(rg *storage.RowGroup, threshold int64) []r
 // It walks the row group one row at a time but only counts survivors
 // instead of materializing them, matching the shape of the
 // VectorizedDrain benchmark for a fair comparison.
+//go:noinline
 func naiveRowAtATimeCount(rg *storage.RowGroup, threshold int64) int {
 	ageChunk := rg.ColumnByName("age")
 	ageVals := ageChunk.Values.(*storage.Int64Column)
@@ -229,13 +230,36 @@ func TestPipelineWithNullsMatchesBaseline(t *testing.T) {
 func TestPipelineCompoundFilterMatchesNaive(t *testing.T) {
 	// Correctness twin of the compound benchmark
 	// (BenchmarkPipelineVectorizedDrainCompound). Two chained FilterOps
-	// must produce the same survivor count as a naive row-at-a-time
-	// loop evaluating both predicates per row.
+	// must produce the same survivor SET (not just count!) as a naive
+	// row-at-a-time loop evaluating both predicates per row. Counting
+	// alone could miss a compensating bug that drops one row and adds
+	// another.
 	const n = 10_000
 	rg := makePipelineRowGroup(t, n)
 
-	want := naiveRowAtATimeCountCompound(rg, 30, 60)
+	// Naive baseline collects matching ages with their original row index.
+	type hit struct {
+		row int
+		age int64
+	}
+	ageChunk := rg.ColumnByName("age")
+	ageVals := ageChunk.Values.(*storage.Int64Column)
+	ageNulls := ageChunk.Nulls
+	want := make([]hit, 0, n/3)
+	for i := range rg.RowCount {
+		if ageNulls.IsNull(i) {
+			continue
+		}
+		a := ageVals.Get(i)
+		if a > 30 && a < 60 {
+			want = append(want, hit{row: i, age: a})
+		}
+	}
+	if len(want) == 0 {
+		t.Fatal("baseline produced 0 survivors — fixture or test broken")
+	}
 
+	// Vectorized chain — track absolute row index across batches.
 	scan, err := NewScanOp(rg, []string{"age"})
 	if err != nil {
 		t.Fatal(err)
@@ -249,20 +273,75 @@ func TestPipelineCompoundFilterMatchesNaive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := 0
+	got := make([]hit, 0, n/3)
+	batchStart := 0
 	for {
 		batch, ok := filter2.Next()
 		if !ok {
 			break
 		}
-		got += batch.Len()
+		ages := batch.Vectors[0].Int64s()
+		batchSize := batch.Vectors[0].Len()
+		for _, i := range batch.Sel.Indices() {
+			got = append(got, hit{row: batchStart + int(i), age: ages[i]})
+		}
+		batchStart += batchSize
 	}
-	if got != want {
-		t.Fatalf("compound filter survivor count mismatch: vectorized=%d naive=%d", got, want)
+
+	if len(got) != len(want) {
+		t.Fatalf("compound filter survivor count mismatch: vectorized=%d naive=%d", len(got), len(want))
 	}
-	// Sanity: every survivor must satisfy both predicates.
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("survivor %d mismatch: vectorized=%+v naive=%+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestPipelineTripleFilterMatchesNaive(t *testing.T) {
+	// Correctness twin for the 3-predicate chain. Same membership-not-
+	// just-count check as the compound twin.
+	const n = 10_000
+	rg := makePipelineRowGroup(t, n)
+	want := naiveRowAtATimeCountTriple(rg, 30, 60, 45)
 	if want == 0 {
 		t.Fatal("baseline produced 0 survivors — fixture or test broken")
+	}
+
+	scan, err := NewScanOp(rg, []string{"age"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f1, err := NewFilterOp(scan, 0, Int64Gt{Value: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2, err := NewFilterOp(f1, 0, Int64Lt{Value: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f3, err := NewFilterOp(f2, 0, Int64Ne{Value: 45})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := 0
+	for {
+		batch, ok := f3.Next()
+		if !ok {
+			break
+		}
+		ages := batch.Vectors[0].Int64s()
+		for _, i := range batch.Sel.Indices() {
+			a := ages[i]
+			if !(a > 30 && a < 60 && a != 45) {
+				t.Fatalf("triple filter passed row violating predicates: age=%d", a)
+			}
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("triple filter survivor count mismatch: vectorized=%d naive=%d", got, want)
 	}
 }
 
