@@ -436,77 +436,77 @@
     <tbody>
       <tr>
         <td class="pkg-exec"><code>Operator</code> (interface)</td>
-        <td>Universal pull-based contract: <code>Next() (*Batch, bool)</code> + <code>Reset()</code>. Every execution step — scan, filter, projection, aggregation — implements it, so pipelines compose by wrapping child operators (Volcano-batch model).</td>
+        <td>Pull-based contract: <code>Next() (*Batch, bool)</code> + <code>Reset()</code>. Every operator implements it; pipelines compose by wrapping children.</td>
         <td><code>exec/operator.go</code></td>
       </tr>
       <tr>
         <td class="pkg-exec"><code>ScanOp</code></td>
-        <td>Source operator of the vectorized engine. Holds a <code>*RowGroup</code>, walks it in chunks of ≤1024 rows, and yields a reused <code>*Batch</code> per <code>Next()</code> call. Initializes each batch's <code>Sel</code> to a full selection. Zero allocations after construction.</td>
+        <td>Source: walks a <code>RowGroup</code> in ≤1024-row batches, yields a reused <code>*Batch</code> with full <code>Sel</code>.</td>
         <td><code>exec/scan.go</code></td>
       </tr>
       <tr>
         <td class="pkg-exec"><code>FilterOp</code></td>
-        <td>Wraps a child <code>Operator</code> and narrows each batch's <code>Sel</code> using a <code>Predicate</code>. Vectors are never copied, mutated, or resized — only the selection changes (late materialization). Fully-filtered batches are silently skipped. Uses an O(1) pointer swap between a scratch selection and <code>Batch.Sel</code> instead of a copy. Zero allocations in steady state.</td>
+        <td>Narrows <code>Batch.Sel</code> via a <code>Predicate</code>. Vectors untouched; O(1) pointer swap with a scratch selection. Fully-filtered batches skipped.</td>
         <td><code>exec/filter.go</code></td>
       </tr>
       <tr>
         <td class="pkg-exec"><code>ProjectOp</code></td>
-        <td>Wraps a child <code>Operator</code> and drops/reorders columns by pointer-aliasing a subset of the child's Vectors into a reused output Batch. Selection passes through by reference — dropping columns never changes which rows are alive. Supports arbitrary reordering and duplicate columns. Zero copy, zero allocation. When Project sits directly above Scan, push the narrower column list into <code>NewScanOp</code> instead to avoid decoding dropped columns at all.</td>
+        <td>Drops/reorders columns by pointer-aliasing a subset of the child's Vectors. <code>Sel</code> passes through. Zero copy.</td>
         <td><code>exec/project.go</code></td>
       </tr>
       <tr>
         <td class="pkg-exec"><code>Predicate</code> (interface)</td>
-        <td>Column-level boolean test: <code>Eval(vec, in, out *Selection)</code>. Concrete Int64 predicates cover <code>Eq / Ne / Lt / Le / Gt / Ge</code>. Each branches once on <code>HasNulls</code> and picks between a tight null-free loop and a null-aware loop — no interface calls in the inner loop body. Nulls never match any predicate (three-valued logic).</td>
+        <td><code>Eval(vec, in, out *Selection)</code>. Int64: <code>Eq / Ne / Lt / Le / Gt / Ge</code>. Nulls never match (three-valued logic).</td>
         <td><code>exec/predicate.go</code></td>
       </tr>
       <tr>
         <td class="pkg-exec"><code>Batch</code></td>
-        <td>Set of aligned <code>*Vector</code>s (one per output column) plus a <code>*Selection</code> marking which rows are still alive. All vectors share the same raw length; row <em>i</em> refers to the same tuple across columns. <code>Batch.Len()</code> returns live row count via <code>Sel</code>; vector data stays at raw length regardless of filters.</td>
+        <td>Aligned <code>Vectors []*Vector</code> + <code>Sel *Selection</code>. Row <em>i</em> is the same tuple across all columns.</td>
         <td><code>exec/batch.go</code></td>
       </tr>
       <tr>
         <td class="pkg-exec"><code>Vector</code></td>
-        <td>A ≤1024-row batch of one column. Wraps a typed <code>storage.Column</code> (pre-sized to <code>VectorSize</code>) plus a <code>NullBitmap</code>. Exposes <code>Int64s() / Float64s() / ...</code> so filter hot paths iterate raw slices with no interface calls.</td>
+        <td>One column's ≤1024-row batch. Wraps a typed <code>storage.Column</code> + <code>NullBitmap</code>. <code>Int64s() / Float64s() / ...</code> expose raw slices for hot loops.</td>
         <td><code>exec/vector.go</code></td>
       </tr>
       <tr>
         <td class="pkg-exec"><code>Selection</code></td>
-        <td>Compact <code>[]uint16</code> of row indices inside the current batch that are still alive after the filters applied so far. Embedded in every <code>Batch</code> and narrowed by <code>FilterOp</code> — the core late-materialization mechanism. Exposes <code>AppendUint16Unchecked</code> as the filter hot-path primitive (no bounds check, caller-trusted indices) plus <code>CopyFrom</code> for bulk replacement. Allocation-free recycle via <code>Reset()</code> / <code>ResetFull(n)</code>.</td>
+        <td>Compact <code>[]uint16</code> of live row indices inside a batch. The late-materialization primitive: vectors never shrink, only this index list does.</td>
         <td><code>exec/selection.go</code></td>
       </tr>
       <tr>
         <td class="pkg-storage"><code>RowGroup</code></td>
-        <td>Horizontal slice of a table: a bundle of <code>*ColumnChunk</code>s that share a row count. Real-world row groups are ~65k rows each; they are the unit of parallel read, skip-scanning, and file-level indexing.</td>
+        <td>Horizontal slice of a table — a bundle of <code>ColumnChunk</code>s sharing a row count. Unit of parallel read and skip-scan.</td>
         <td><code>storage/rowgroup.go</code></td>
       </tr>
       <tr>
         <td class="pkg-storage"><code>ColumnChunk</code></td>
-        <td>Named + typed column for one row group. Combines a <code>Column</code> (values) with a <code>NullBitmap</code> and stats (min/max/null count). The building block that row groups are made of and that the file format serializes.</td>
+        <td>Named + typed column: <code>Column</code> values + <code>NullBitmap</code> + stats (min/max/null count).</td>
         <td><code>storage/chunk.go</code></td>
       </tr>
       <tr>
         <td class="pkg-storage"><code>Column</code> (interface)</td>
-        <td>Abstract contract for a typed contiguous array. Implemented by <code>Int64Column</code>, <code>Float64Column</code>, <code>StringColumn</code>, <code>BoolColumn</code> — each backed by a plain typed slice, with <code>Append</code> / <code>AppendSlice</code> / <code>Reset</code> methods.</td>
-        <td><code>storage/types.go</code> + <code>int64.go / float64.go / string.go / bool.go</code></td>
+        <td>Typed contiguous array. Concrete: <code>Int64Column</code>, <code>Float64Column</code>, <code>StringColumn</code>, <code>BoolColumn</code>.</td>
+        <td><code>storage/types.go</code></td>
       </tr>
       <tr>
         <td class="pkg-storage"><code>NullBitmap</code></td>
-        <td>Bit-packed null tracking — 1 bit per row, 8× smaller than <code>[]bool</code>. Shared between <code>ColumnChunk</code> (persistent) and <code>Vector</code> (per-batch). <code>Reset()</code> zeros in place for reuse.</td>
+        <td>Bit-packed null tracking — 1 bit per row, 8× smaller than <code>[]bool</code>. Shared between <code>ColumnChunk</code> and <code>Vector</code>.</td>
         <td><code>storage/bitmap.go</code></td>
       </tr>
       <tr>
-        <td class="pkg-disk"><code>SingleFileWriter</code> / <code>SingleFileReader</code></td>
-        <td>.cldb binary file format. Layout: magic <code>"CLDB"</code> → row groups → footer (schema, row-group index, column stats) → footer length (4B LE) → trailing magic <code>"CLDB"</code>. Footer-at-end makes the file self-describing and seekable, same pattern as Parquet.</td>
-        <td><code>storage/writer.go</code>, <code>storage/reader.go</code>, <code>storage/format.go</code></td>
+        <td class="pkg-disk"><code>SingleFileWriter / Reader</code></td>
+        <td>.cldb binary format. Layout: magic <code>CLDB</code> → row groups → footer → footer length (4B LE) → magic. Footer-at-end, seekable, Parquet-style.</td>
+        <td><code>storage/writer.go</code>, <code>reader.go</code>, <code>format.go</code></td>
       </tr>
       <tr>
         <td class="pkg-encoding"><code>Encoder</code> (interface)</td>
-        <td>Column-aware compression. <code>Plain</code> = raw baseline, <code>RLE</code> = run-length for repeated values, <code>Dictionary</code> = index lookup for low-cardinality strings, <code>Delta</code> = differences for sorted integers. Writer picks an encoding per column chunk; metadata records the choice.</td>
-        <td><code>encoding/encoder.go</code> + <code>plain.go / rle.go / dictionary.go / delta.go</code></td>
+        <td>Column-aware compression: <code>Plain</code>, <code>RLE</code>, <code>Dictionary</code>, <code>Delta</code>. Writer picks per chunk; metadata records the choice.</td>
+        <td><code>encoding/</code></td>
       </tr>
       <tr>
         <td class="pkg-encoding"><code>LZ4Compressor</code></td>
-        <td>General-purpose block compression applied on top of the column encoding. Works on the encoded byte stream, not the raw values — cheap to decode in the read path.</td>
+        <td>Block compression on top of the column encoding — operates on encoded bytes.</td>
         <td><code>encoding/lz4.go</code></td>
       </tr>
     </tbody>
@@ -515,33 +515,22 @@
   <h2>Data Flow</h2>
 
   <div class="flow">
-    <strong>Write path</strong> (in-memory → disk)
-    <ol>
-      <li>Caller builds typed <code>Column</code>s (<code>Int64Column</code>, …) with raw values + a <code>NullBitmap</code>.</li>
-      <li><code>ColumnChunk</code>s wrap them (one per column) and compute stats.</li>
-      <li><code>RowGroup</code> bundles aligned chunks.</li>
-      <li><code>SingleFileWriter</code>.WriteRowGroup <span class="arrow">→</span> picks an <code>Encoder</code> per column chunk <span class="arrow">→</span> <code>LZ4Compressor</code> <span class="arrow">→</span> writes bytes.</li>
-      <li>Footer (schema + row-group index + column stats) is appended at <code>Close()</code>.</li>
-    </ol>
-    <strong>Read path</strong> (disk → in-memory → execution)
-    <ol>
-      <li><code>SingleFileReader</code>.Open seeks to end, reads footer offset + footer, learns layout.</li>
-      <li><code>ReadRowGroup(i)</code>: fetch bytes for each requested column <span class="arrow">→</span> <code>LZ4</code> decompress <span class="arrow">→</span> decode via the recorded <code>Encoder</code> <span class="arrow">→</span> reconstruct <code>Column</code>s + <code>NullBitmap</code> <span class="arrow">→</span> assemble a <code>RowGroup</code>.</li>
-      <li><code>NewScanOp(rg, []string{…})</code> allocates one output <code>Batch</code> of pre-sized <code>Vector</code>s (one per requested column).</li>
-      <li>On each <code>Next()</code>: <code>Batch.Reset()</code> <span class="arrow">→</span> <code>Vector.CopyFromChunk(chunk, offset, n)</code> does one typed memmove per column per batch <span class="arrow">→</span> returns the reused <code>*Batch</code>.</li>
-      <li><code>FilterOp</code>.Next <span class="arrow">→</span> pull from child, evaluate <code>Predicate.Eval</code> against one column, swap <code>Batch.Sel</code> with the narrowed scratch selection. Vectors are never touched. Fully-filtered batches are silently skipped.</li>
-      <li><code>ProjectOp</code>.Next <span class="arrow">→</span> pull from child, re-bind the reused output batch's <code>Vectors</code> slice to point at the requested subset of the child's vectors, share <code>Sel</code> by reference, return. No data touched.</li>
-      <li><em>(Coming in Phase 3 Step 6)</em> end-to-end pipeline benchmark over <code>Scan → Filter → Project</code> validating the zero-alloc / ≥5× speedup target.</li>
-    </ol>
+    <strong>Write</strong> &nbsp; typed <code>Column</code>s + <code>NullBitmap</code> <span class="arrow">→</span> <code>ColumnChunk</code>s <span class="arrow">→</span> <code>RowGroup</code> <span class="arrow">→</span> <code>SingleFileWriter</code> <span class="arrow">→</span> per-chunk <code>Encoder</code> <span class="arrow">→</span> <code>LZ4</code> <span class="arrow">→</span> bytes; footer appended on <code>Close()</code>.
+    <br><br>
+    <strong>Read</strong> &nbsp; <code>SingleFileReader</code>.Open reads footer <span class="arrow">→</span> <code>ReadRowGroup(i)</code> decompresses + decodes <span class="arrow">→</span> in-memory <code>RowGroup</code>.
+    <br><br>
+    <strong>Execute</strong> &nbsp; <code>ScanOp</code> (reused Batch, full <code>Sel</code>) <span class="arrow">→</span> <code>FilterOp</code> (swaps <code>Sel</code> with narrowed scratch) <span class="arrow">→</span> <code>ProjectOp</code> (rebinds Vectors subset, shares <code>Sel</code>) <span class="arrow">→</span> consumer iterates <code>b.Sel.Indices()</code>.
+    <br><br>
+    <em>Coming in Phase 3 Step 6:</em> end-to-end pipeline benchmark (<code>Scan → Filter → Project</code>, zero alloc, ≥5× vs row-at-a-time).
   </div>
 
-  <h2>Key Design Invariants</h2>
+  <h2>Invariants</h2>
 
   <ul>
-    <li><strong>Layout invariant (Vector):</strong> <code>Values.Len() == length</code> at all times — nulls store a zero-value placeholder in <code>Values</code> so row index <em>i</em> is the same position in both the typed slice and the null bitmap. Lets the filter hot path index the typed slice directly.</li>
-    <li><strong>Alignment invariant (Batch):</strong> every <code>Vector</code> in a <code>Batch</code> has identical <code>Len()</code>. Row <em>i</em> refers to the same tuple across all columns. Operators that shrink batches do so via <code>Selection</code>, not by resizing vectors.</li>
-    <li><strong>Zero-alloc hot path:</strong> <code>Vector</code> and <code>Batch</code> are allocated once at <code>NewScanOp</code> and recycled. <code>Reset()</code> truncates backing slices in place and zeros bitmaps. Enforced by <code>TestScanZeroAllocPerBatch</code>.</li>
-    <li><strong>Late materialization (planned):</strong> no operator reconstructs full rows. Values live column-wise in batches from disk to the final result — aggregates may never materialize rows at all.</li>
+    <li><strong>Layout</strong> — <code>Vector.Values.Len() == length</code>: nulls store a zero placeholder so row <em>i</em> is the same position in the typed slice and the bitmap.</li>
+    <li><strong>Alignment</strong> — every <code>Vector</code> in a <code>Batch</code> has identical <code>Len()</code>. Row <em>i</em> is the same tuple across columns. Only <code>Sel</code> shrinks.</li>
+    <li><strong>Zero-alloc hot path</strong> — <code>Batch</code> / <code>Vector</code> / <code>Selection</code> allocated once at operator construction and recycled via <code>Reset()</code>. Enforced by <code>AllocsPerRun</code> tests.</li>
+    <li><strong>Late materialization</strong> — no operator rebuilds rows. Values stay column-wise from disk to the final result.</li>
   </ul>
 
 </div>
