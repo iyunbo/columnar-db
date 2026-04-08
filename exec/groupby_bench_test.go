@@ -79,6 +79,38 @@ var (
 
 const highCardDistinct = 10_000
 
+// Extra-high cardinality (100k groups) is a stress run to confirm the
+// high-card trend extrapolates and the decision's "zero-alloc scales"
+// argument is evidence, not conjecture. rowIdx % 100000 over 1M rows
+// yields ~10 rows per group — the naive map carries 100k *acc cells
+// plus every bucket rehash Go's growth schedule triggers.
+const extraHighCardDistinct = 100_000
+
+var (
+	extraHighCardRGOnce sync.Once
+	extraHighCardRG     *storage.RowGroup
+)
+
+func getExtraHighCardBenchRG(tb testing.TB) *storage.RowGroup {
+	extraHighCardRGOnce.Do(func() {
+		rng := rand.New(rand.NewPCG(5005, 6006))
+		ids := make([]int64, groupByBenchRows)
+		ages := make([]int64, groupByBenchRows)
+		for i := range groupByBenchRows {
+			ids[i] = int64(rng.IntN(extraHighCardDistinct))
+			ages[i] = int64(rng.IntN(90))
+		}
+		idCol := storage.NewColumnChunkNoNulls("user_id", storage.NewInt64ColumnFromSlice(ids))
+		ageCol := storage.NewColumnChunkNoNulls("age", storage.NewInt64ColumnFromSlice(ages))
+		rg, err := storage.NewRowGroup(idCol, ageCol)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		extraHighCardRG = rg
+	})
+	return extraHighCardRG
+}
+
 func getHighCardBenchRG(tb testing.TB) *storage.RowGroup {
 	highCardRGOnce.Do(func() {
 		rng := rand.New(rand.NewPCG(3003, 4004))
@@ -226,6 +258,82 @@ func BenchmarkGroupByHighCardNaive(b *testing.B) {
 
 func BenchmarkGroupByHighCardVectorized(b *testing.B) {
 	rg := getHighCardBenchRG(b)
+	scan, err := NewScanOp(rg, []string{"user_id", "age"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	op, err := NewGroupByOp(scan, 0, storage.TypeInt64, []AggregateSpec{
+		{Name: "n", ColIndex: 0, Agg: &CountStar{}},
+		{Name: "avg_age", ColIndex: 1, Agg: &Int64Avg{}},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	var total int64
+	b.ReportAllocs()
+	for b.Loop() {
+		op.Reset()
+		total = 0
+		for {
+			batch, ok := op.Next()
+			if !ok {
+				break
+			}
+			counts := batch.Vectors[1].Int64s()
+			for _, i := range batch.Sel.Indices() {
+				total += counts[i]
+			}
+		}
+	}
+	if total != groupByBenchRows {
+		b.Fatalf("total rows = %d, want %d", total, groupByBenchRows)
+	}
+}
+
+// =====================================================================
+// Extra-high cardinality (100k int64 groups) — stress run
+// =====================================================================
+
+func naiveGroupByExtraHighCard(rg *storage.RowGroup) (totalCount int64, totalSum int64) {
+	ids := rg.ColumnByName("user_id").Values.(*storage.Int64Column).Values()
+	ages := rg.ColumnByName("age").Values.(*storage.Int64Column).Values()
+
+	type acc struct {
+		count int64
+		sum   int64
+	}
+	m := make(map[int64]*acc, extraHighCardDistinct)
+	for i, id := range ids {
+		a, ok := m[id]
+		if !ok {
+			a = &acc{}
+			m[id] = a
+		}
+		a.count++
+		a.sum += ages[i]
+	}
+	for _, a := range m {
+		totalCount += a.count
+		totalSum += a.sum
+	}
+	return
+}
+
+func BenchmarkGroupByExtraHighCardNaive(b *testing.B) {
+	rg := getExtraHighCardBenchRG(b)
+	var tc int64
+	b.ReportAllocs()
+	for b.Loop() {
+		tc, _ = naiveGroupByExtraHighCard(rg)
+	}
+	if tc != groupByBenchRows {
+		b.Fatalf("totalCount = %d, want %d", tc, groupByBenchRows)
+	}
+}
+
+func BenchmarkGroupByExtraHighCardVectorized(b *testing.B) {
+	rg := getExtraHighCardBenchRG(b)
 	scan, err := NewScanOp(rg, []string{"user_id", "age"})
 	if err != nil {
 		b.Fatal(err)
