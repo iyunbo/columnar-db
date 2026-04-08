@@ -67,19 +67,19 @@ during Step 1 review.
   `(NULL, x)` and `(y, NULL)` stay distinct. Binary/open-addressing
   follow-up filed for after Step 6 benchmarking.
 
-### Step 5.5 — Lift the VectorSize group-count cap
-- Currently `GroupByOp` refuses to assign a `(VectorSize+1)`-th
-  group ordinal because the result Vector's backing slice is
-  `VectorSize (1024)`. Step 6's benchmark requires ~10 000 distinct
-  groups, so this MUST be lifted before Step 6 runs.
-- Approach: convert `Next()` into an emission cursor. First call
-  drains the child and builds the hash table + aggregator state;
-  subsequent calls reset the output batch and emit the next
-  `VectorSize`-sized slice of groups until `emitCursor >= numGroups`.
-- Uses the same `AggregateSpec` / output batch — no API change.
-- Tests: drain a fixture with `> VectorSize` groups through
-  multiple output batches, confirm total groups match the naive
-  baseline, confirm Reset works end-to-end.
+### Step 5.5 — Lift the VectorSize group-count cap ✓
+- DONE. `GroupByOp.Next()` is now an emission cursor: first call
+  drains the child and builds the hash+aggregator state, every call
+  (including the first) resets the output batch and emits the next
+  `VectorSize`-wide window of groups until `emitCursor >= numGroups`.
+  Group count is unbounded (Phase 4 still assumes hash tables fit
+  in memory).
+- Single-key null-cut hoist generalized to a `[start, end)` window;
+  multi-key emission is a per-column window walk with per-row null
+  probe (benchmark-gated optimization deferred).
+- Tests: two new multi-batch tests (single-key 2185 groups across
+  3 batches, multi-key 2121 composite keys across 3 batches);
+  Reset works end-to-end on both paths.
 
 ### Step 6 — Benchmark + decision point
 - Twin benchmarks: naive row-at-a-time GROUP BY (Go map + per-row
