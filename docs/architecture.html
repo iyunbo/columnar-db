@@ -120,13 +120,13 @@
 
   <h1>columnar-db — Architecture</h1>
   <p class="subtitle">
-    Static snapshot of the codebase as of Phase 4 Step 3
+    Static snapshot of the codebase as of Phase 4 Step 4
     (<code>main</code>, exec package has the <code>Operator</code> interface +
     <code>ScanOp</code>, <code>FilterOp</code>, <code>ProjectOp</code>,
-    <code>AggregateOp</code> [scalar],
+    <code>AggregateOp</code> [scalar], <code>GroupByOp</code> [single-key hash],
     <code>Vector</code>, <code>Batch</code>, <code>Selection</code>,
     <code>Predicate</code>, <code>Aggregator</code> with 9 concrete
-    implementations. Step 4 — <code>GroupByOp</code> — is next).
+    implementations. Step 5 — multi-key GROUP BY — is next).
   </p>
 
   <h2>Layered View</h2>
@@ -163,7 +163,7 @@
         fill="#0f1b12" stroke="#7ee787" stroke-opacity="0.35"/>
   <text x="38" y="48" fill="#7ee787" font-weight="700" font-size="14">exec/ — VECTORIZED EXECUTION ENGINE</text>
   <text x="38" y="66" fill="#8b949e" font-size="12">process ~1024 values per batch in tight typed loops; zero allocs in hot path</text>
-  <text x="38" y="82" fill="#8b949e" font-size="11" font-style="italic">canonical pipeline: ScanOp → FilterOp → ProjectOp → (Phase 4: AggregateOp) → consumer</text>
+  <text x="38" y="82" fill="#8b949e" font-size="11" font-style="italic">canonical pipeline: ScanOp → FilterOp → ProjectOp → (AggregateOp | GroupByOp) → consumer</text>
 
   <!-- ScanOp -->
   <g>
@@ -250,11 +250,20 @@
 
   <!-- AggregateOp (Phase 4 Step 3) -->
   <g>
-    <rect x="550" y="310" width="280" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
-    <text x="690" y="335" text-anchor="middle" fill="#7ee787" font-weight="700">AggregateOp</text>
-    <line x1="562" y1="344" x2="818" y2="344" stroke="#30363d"/>
-    <text x="562" y="362" fill="#c9d1d9" font-size="12">scalar aggregation (no GROUP BY)</text>
-    <text x="562" y="376" fill="#c9d1d9" font-size="12">drains child → 1-row result Batch</text>
+    <rect x="550" y="310" width="150" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
+    <text x="625" y="335" text-anchor="middle" fill="#7ee787" font-weight="700">AggregateOp</text>
+    <line x1="562" y1="344" x2="688" y2="344" stroke="#30363d"/>
+    <text x="562" y="362" fill="#c9d1d9" font-size="11">scalar (no GROUP BY)</text>
+    <text x="562" y="376" fill="#c9d1d9" font-size="11">→ 1-row Batch</text>
+  </g>
+
+  <!-- GroupByOp (Phase 4 Step 4) -->
+  <g>
+    <rect x="710" y="310" width="140" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
+    <text x="780" y="335" text-anchor="middle" fill="#7ee787" font-weight="700">GroupByOp</text>
+    <line x1="722" y1="344" x2="838" y2="344" stroke="#30363d"/>
+    <text x="722" y="362" fill="#c9d1d9" font-size="11">hash GROUP BY</text>
+    <text x="722" y="376" fill="#c9d1d9" font-size="11">1 key (int64 | str)</text>
   </g>
 
   <!-- Aggregator interface (row 3 right) -->
@@ -263,13 +272,13 @@
           fill="#162418" stroke="#f0883e" stroke-dasharray="4 3"/>
     <text x="1000" y="335" text-anchor="middle" fill="#f0883e" font-weight="700" font-style="italic">«interface» Aggregator</text>
     <line x1="872" y1="344" x2="1128" y2="344" stroke="#30363d"/>
-    <text x="872" y="362" fill="#c9d1d9" font-size="12">Init / Update(vec, sel) / Finalize</text>
-    <text x="872" y="376" fill="#c9d1d9" font-size="12">Phase 4: Count/Sum/Min/Max/Avg</text>
+    <text x="872" y="362" fill="#c9d1d9" font-size="12">Init / Grow / Update(vec, sel, gids) / Finalize</text>
+    <text x="872" y="376" fill="#c9d1d9" font-size="12">Count/Sum/Min/Max/Avg (int64 + float64)</text>
   </g>
 
-  <!-- AggregateOp → Aggregator (uses) -->
-  <line x1="830" y1="345" x2="860" y2="345" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="845" y="338" text-anchor="middle" fill="#58a6ff" font-size="11">uses</text>
+  <!-- AggregateOp + GroupByOp → Aggregator (both use) -->
+  <line x1="850" y1="345" x2="860" y2="345" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="855" y="395" text-anchor="middle" fill="#58a6ff" font-size="11">AggregateOp &amp; GroupByOp use Aggregator</text>
 
   <!-- FilterOp → ProjectOp (wraps as child) -->
   <path d="M 670 290 Q 650 300 500 310" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
