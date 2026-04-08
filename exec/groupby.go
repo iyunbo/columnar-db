@@ -2,10 +2,18 @@ package exec
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/iyunbo/columnar-db/storage"
 )
+
+// errGroupCapExceeded is the sentinel returned by ingestBatch /
+// ingestBatchMulti when numGroups would cross VectorSize. Sentinel
+// (not fmt.Errorf at call site) so the ingest hot path does not
+// allocate on the happy path. Step 5.5 will lift the cap via
+// multi-batch emission.
+var errGroupCapExceeded = errors.New("exec: GroupByOp exceeded group-count cap of VectorSize (1024); Step 5.5 will lift this via multi-batch emission")
 
 // GroupByOp is the single-key hash GROUP BY operator. It pulls batches
 // from a child operator, hashes each surviving row's key into a group
@@ -96,14 +104,10 @@ type GroupByOp struct {
 	child Operator
 
 	// multiKey is true iff this operator was built via
-	// NewGroupByOpMulti with ≥1 key column encoded into a composite
-	// byte key. When false, the operator uses the Step 4 single-key
-	// fast path (typed maps, no encoding).
+	// NewGroupByOpMulti with a composite byte key. When false, the
+	// operator uses the Step 4 single-key fast path (typed maps, no
+	// encoding).
 	multiKey bool
-	// numKeyCols is len(keyColIndex[es]) — 1 in single-key mode, ≥1
-	// in multi-key mode. Used to index output batch key columns and
-	// size the per-group state slices.
-	numKeyCols int
 
 	// Single-key fields (Step 4; still the fast path):
 	// keyColIndex is the column in every child batch that we group by.
@@ -136,9 +140,18 @@ type GroupByOp struct {
 	// does not allocate. Lengths == numKeyCols; the int64s/strings
 	// scratches hold pre-hoisted typed views of each key column's
 	// Values (fetching them once per batch instead of once per row).
-	keyVecsScratch        []*Vector
-	keyVecInt64sScratch   [][]int64
-	keyVecStringsScratch  [][]string
+	keyVecsScratch       []*Vector
+	keyVecInt64sScratch  [][]int64
+	keyVecStringsScratch [][]string
+	// hasNullsScratch[i] is the hoisted keyVecs[i].Nulls.HasNulls()
+	// value, set once per batch so the per-row null probe matches
+	// the single-key path's hoisting discipline.
+	hasNullsScratch []bool
+	// rowNullsScratch carries the isNull flag per key column for the
+	// current row being processed, so the new-group recording pass
+	// reuses the encode pass's result instead of re-probing the
+	// null bitmap.
+	rowNullsScratch []bool
 
 	specs []AggregateSpec
 
@@ -202,38 +215,21 @@ func NewGroupByOp(child Operator, keyColIndex int, keyType storage.ColumnType, s
 	if keyType != storage.TypeInt64 && keyType != storage.TypeString {
 		return nil, fmt.Errorf("exec: GroupByOp Step 4 supports only Int64/String keys, got %s", keyType)
 	}
-	if len(specs) == 0 {
-		return nil, fmt.Errorf("exec: GroupByOp requires at least one aggregator spec")
+	if err := validateAggregateSpecs("GroupByOp", specs); err != nil {
+		return nil, err
 	}
 
-	seen := make(map[Aggregator]struct{}, len(specs))
 	out := &Batch{
 		Vectors: make([]*Vector, 1+len(specs)),
 		Sel:     NewSelection(),
 	}
-	// Column 0 is the key.
 	out.Vectors[0] = NewVector(keyType)
 	for i, s := range specs {
-		if s.Agg == nil {
-			return nil, fmt.Errorf("exec: GroupByOp AggregateSpec[%d] (%q) has nil Aggregator", i, s.Name)
-		}
-		if s.ColIndex < 0 {
-			return nil, fmt.Errorf("exec: GroupByOp AggregateSpec[%d] (%q) has negative ColIndex %d", i, s.Name, s.ColIndex)
-		}
-		if _, dup := seen[s.Agg]; dup {
-			return nil, fmt.Errorf("exec: GroupByOp AggregateSpec[%d] (%q) reuses an Aggregator instance already used by an earlier spec; each spec needs its own Aggregator", i, s.Name)
-		}
-		seen[s.Agg] = struct{}{}
 		out.Vectors[1+i] = NewVector(s.Agg.OutputType())
-		// No Init here — numGroups starts at 0, every aggregator gets
-		// a first Grow(numGroups) per ingested batch before its first
-		// Update call. The Aggregator contract allows a nil state slice
-		// at this point; Grow's `make+copy` path handles it.
 	}
 
 	op := &GroupByOp{
 		child:       child,
-		numKeyCols:  1,
 		keyColIndex: keyColIndex,
 		keyType:     keyType,
 		specs:       specs,
@@ -292,31 +288,18 @@ func NewGroupByOpMulti(child Operator, keyColIndexes []int, keyTypes []storage.C
 			return nil, fmt.Errorf("exec: GroupByOpMulti supports only Int64/String keys, keyTypes[%d] = %s", i, keyTypes[i])
 		}
 	}
-	if len(specs) == 0 {
-		return nil, fmt.Errorf("exec: GroupByOpMulti requires at least one aggregator spec")
+	if err := validateAggregateSpecs("GroupByOpMulti", specs); err != nil {
+		return nil, err
 	}
 
-	seen := make(map[Aggregator]struct{}, len(specs))
 	out := &Batch{
 		Vectors: make([]*Vector, len(keyColIndexes)+len(specs)),
 		Sel:     NewSelection(),
 	}
-	// Key columns come first in output schema order, then aggregate
-	// columns.
 	for i, kt := range keyTypes {
 		out.Vectors[i] = NewVector(kt)
 	}
 	for i, s := range specs {
-		if s.Agg == nil {
-			return nil, fmt.Errorf("exec: GroupByOpMulti AggregateSpec[%d] (%q) has nil Aggregator", i, s.Name)
-		}
-		if s.ColIndex < 0 {
-			return nil, fmt.Errorf("exec: GroupByOpMulti AggregateSpec[%d] (%q) has negative ColIndex %d", i, s.Name, s.ColIndex)
-		}
-		if _, dup := seen[s.Agg]; dup {
-			return nil, fmt.Errorf("exec: GroupByOpMulti AggregateSpec[%d] (%q) reuses an Aggregator instance already used by an earlier spec; each spec needs its own Aggregator", i, s.Name)
-		}
-		seen[s.Agg] = struct{}{}
 		out.Vectors[len(keyColIndexes)+i] = NewVector(s.Agg.OutputType())
 	}
 
@@ -343,7 +326,6 @@ func NewGroupByOpMulti(child Operator, keyColIndexes []int, keyTypes []storage.C
 	op := &GroupByOp{
 		child:           child,
 		multiKey:        true,
-		numKeyCols:      len(kci),
 		keyColIndexes:   kci,
 		keyTypes:        kts,
 		specs:           specs,
@@ -361,6 +343,8 @@ func NewGroupByOpMulti(child Operator, keyColIndexes []int, keyTypes []storage.C
 		keyVecsScratch:       make([]*Vector, len(kci)),
 		keyVecInt64sScratch:  make([][]int64, len(kci)),
 		keyVecStringsScratch: make([][]string, len(kci)),
+		hasNullsScratch:      make([]bool, len(kci)),
+		rowNullsScratch:      make([]bool, len(kci)),
 	}
 	return op, nil
 }
@@ -413,8 +397,12 @@ func (g *GroupByOp) Next() (*Batch, bool) {
 	// back to (value → ordinal) — since ordinals are dense, a single
 	// reverse-index pass is enough.
 	g.emitKeys()
+	numKeyCols := 1
+	if g.multiKey {
+		numKeyCols = len(g.keyColIndexes)
+	}
 	for i, s := range g.specs {
-		outVec := g.out.Vectors[g.numKeyCols+i]
+		outVec := g.out.Vectors[numKeyCols+i]
 		for gid := 0; gid < g.numGroups; gid++ {
 			s.Agg.Finalize(gid, outVec)
 		}
@@ -452,16 +440,12 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 	// possible in steady state.
 	g.groupIDs = g.groupIDs[:0]
 
-	// Step 4 group-count cap: the result Vector's backing slice is
-	// VectorSize (1024), so we refuse to assign a (VectorSize+1)-th
-	// ordinal. Checked INSIDE the probe loop, before the assignment —
-	// checking it only at batch end would let a pathological batch
-	// balloon numGroups and keysInt64 far past the cap before we
-	// noticed. On overflow we set the sticky error, stop ingesting
-	// (the partially-built groupIDs buffer is safe to abandon because
-	// we never called Update), and the caller picks it up via Err().
-	capErr := fmt.Errorf("exec: GroupByOp exceeded Step 4 group-count cap of %d; Step 5 will lift this", VectorSize)
-
+	// Group-count cap checked inside the probe loop (before the
+	// assignment) so a pathological batch cannot balloon numGroups
+	// past VectorSize before we notice. Overflow returns the
+	// package-sentinel errGroupCapExceeded; the partially-built
+	// groupIDs buffer is safe to abandon because we never called
+	// Update.
 	switch g.keyType {
 	case storage.TypeInt64:
 		vals := keyVec.Int64s()
@@ -473,7 +457,7 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 				gid, ok := ht[k]
 				if !ok {
 					if g.numGroups >= VectorSize {
-						return capErr
+						return errGroupCapExceeded
 					}
 					gid = int32(g.numGroups)
 					ht[k] = gid
@@ -487,7 +471,7 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 				if nulls.IsNull(int(i)) {
 					if !g.hasNullGroup {
 						if g.numGroups >= VectorSize {
-							return capErr
+							return errGroupCapExceeded
 						}
 						g.nullGroupID = int32(g.numGroups)
 						g.hasNullGroup = true
@@ -501,7 +485,7 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 				gid, ok := ht[k]
 				if !ok {
 					if g.numGroups >= VectorSize {
-						return capErr
+						return errGroupCapExceeded
 					}
 					gid = int32(g.numGroups)
 					ht[k] = gid
@@ -521,7 +505,7 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 				gid, ok := ht[k]
 				if !ok {
 					if g.numGroups >= VectorSize {
-						return capErr
+						return errGroupCapExceeded
 					}
 					gid = int32(g.numGroups)
 					ht[k] = gid
@@ -535,7 +519,7 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 				if nulls.IsNull(int(i)) {
 					if !g.hasNullGroup {
 						if g.numGroups >= VectorSize {
-							return capErr
+							return errGroupCapExceeded
 						}
 						g.nullGroupID = int32(g.numGroups)
 						g.hasNullGroup = true
@@ -549,7 +533,7 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 				gid, ok := ht[k]
 				if !ok {
 					if g.numGroups >= VectorSize {
-						return capErr
+						return errGroupCapExceeded
 					}
 					gid = int32(g.numGroups)
 					ht[k] = gid
@@ -561,8 +545,6 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 		}
 	}
 
-	// Grow every aggregator's per-group state once for this batch,
-	// then Update.
 	for _, s := range g.specs {
 		s.Agg.Grow(g.numGroups)
 		s.Agg.Update(b.Vectors[s.ColIndex], sel, g.groupIDs)
@@ -632,12 +614,11 @@ func (g *GroupByOp) ingestBatchMulti(b *Batch) error {
 	if len(indices) == 0 {
 		return nil
 	}
-	// Validate key column types against the child batch and hoist
-	// each key column's Vector + typed slice view into the
-	// operator-level scratch slices. Fetching the typed view once
-	// per batch (instead of once per row) is important: it keeps
-	// the per-row encode loop clean and avoids a steady-state
-	// slice allocation for the keyVecs array.
+	// Hoist per-batch: Vector pointer, typed slice view, and
+	// Nulls.HasNulls() for each key column. Matches the single-key
+	// path's hoisting discipline so the per-row encode loop does
+	// one null-bitmap probe per column (not two) and no typed-view
+	// fetch.
 	keyVecs := g.keyVecsScratch
 	for i, ci := range g.keyColIndexes {
 		if ci >= len(b.Vectors) {
@@ -648,6 +629,7 @@ func (g *GroupByOp) ingestBatchMulti(b *Batch) error {
 			return fmt.Errorf("exec: GroupByOpMulti key column %d type mismatch: expected %s, got %s", i, g.keyTypes[i], v.Type)
 		}
 		keyVecs[i] = v
+		g.hasNullsScratch[i] = v.Nulls.HasNulls()
 		switch g.keyTypes[i] {
 		case storage.TypeInt64:
 			g.keyVecInt64sScratch[i] = v.Int64s()
@@ -659,19 +641,16 @@ func (g *GroupByOp) ingestBatchMulti(b *Batch) error {
 	}
 	keyInt64s := g.keyVecInt64sScratch
 	keyStrings := g.keyVecStringsScratch
+	hasNulls := g.hasNullsScratch
+	rowNulls := g.rowNullsScratch
 
 	g.groupIDs = g.groupIDs[:0]
 
-	capErr := fmt.Errorf("exec: GroupByOpMulti exceeded Step 4/5 group-count cap of %d; Step 5.5 will lift this via multi-batch emission", VectorSize)
-
-	// For each surviving row: reset scratch buf, encode each key
-	// column's tagged value, look up / insert in htMulti. On insert
-	// record the decoded per-column values into the per-group
-	// state slices.
 	for _, rowIdx := range indices {
 		g.compositeBuf = g.compositeBuf[:0]
 		for i, kv := range keyVecs {
-			isNull := kv.Nulls.HasNulls() && kv.Nulls.IsNull(int(rowIdx))
+			isNull := hasNulls[i] && kv.Nulls.IsNull(int(rowIdx))
+			rowNulls[i] = isNull
 			if isNull {
 				g.compositeBuf = append(g.compositeBuf, 0x00)
 				continue
@@ -679,36 +658,36 @@ func (g *GroupByOp) ingestBatchMulti(b *Batch) error {
 			g.compositeBuf = append(g.compositeBuf, 0x01)
 			switch g.keyTypes[i] {
 			case storage.TypeInt64:
-				var tmp [8]byte
-				binary.LittleEndian.PutUint64(tmp[:], uint64(keyInt64s[i][rowIdx]))
-				g.compositeBuf = append(g.compositeBuf, tmp[:]...)
+				// Extend the buffer in place and write the int64 LE
+				// directly — avoids the stack-temp + slice-header
+				// dance of `var tmp [8]byte; append(buf, tmp[:]...)`.
+				n := len(g.compositeBuf)
+				g.compositeBuf = append(g.compositeBuf, 0, 0, 0, 0, 0, 0, 0, 0)
+				binary.LittleEndian.PutUint64(g.compositeBuf[n:], uint64(keyInt64s[i][rowIdx]))
 			case storage.TypeString:
 				s := keyStrings[i][rowIdx]
-				var lenTmp [4]byte
-				binary.LittleEndian.PutUint32(lenTmp[:], uint32(len(s)))
-				g.compositeBuf = append(g.compositeBuf, lenTmp[:]...)
+				n := len(g.compositeBuf)
+				g.compositeBuf = append(g.compositeBuf, 0, 0, 0, 0)
+				binary.LittleEndian.PutUint32(g.compositeBuf[n:], uint32(len(s)))
 				g.compositeBuf = append(g.compositeBuf, s...)
 			}
 		}
 
-		// m[string(buf)] for a map[string]X is the standard Go
-		// compiler optimization that avoids the string allocation
-		// on a pure lookup.
+		// m[string(buf)] for map[string]X is the Go compiler
+		// optimization that avoids the string allocation on a pure
+		// lookup. The insertion path below pays one string copy.
 		gid, ok := g.htMulti[string(g.compositeBuf)]
 		if !ok {
 			if g.numGroups >= VectorSize {
-				return capErr
+				return errGroupCapExceeded
 			}
 			gid = int32(g.numGroups)
-			// Map-key insertion must copy the bytes into a real
-			// string — the scratch buffer will be overwritten by
-			// the next row. This is the one unavoidable alloc per
-			// new group in the string-concat strategy.
 			g.htMulti[string(g.compositeBuf)] = gid
 
-			// Record the original per-column values for emission.
-			for i, kv := range keyVecs {
-				isNull := kv.Nulls.HasNulls() && kv.Nulls.IsNull(int(rowIdx))
+			// Record the original per-column values for emission,
+			// reusing the isNull flags the encode pass computed.
+			for i := range keyVecs {
+				isNull := rowNulls[i]
 				g.multiKeyNulls[i] = append(g.multiKeyNulls[i], isNull)
 				switch g.keyTypes[i] {
 				case storage.TypeInt64:
