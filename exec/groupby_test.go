@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"sort"
 	"testing"
@@ -455,6 +456,373 @@ func TestNewGroupByOpValidation(t *testing.T) {
 		{Name: "b", ColIndex: 0, Agg: dup},
 	}); err == nil {
 		t.Error("duplicate Aggregator pointer: want error")
+	}
+}
+
+// =====================================================================
+// Step 5: multi-key composite GROUP BY tests
+// =====================================================================
+
+func TestGroupByOpMultiTwoKeysCountAvg(t *testing.T) {
+	// SELECT city, age, COUNT(*), AVG(price)
+	// FROM t GROUP BY city, age
+	const n = 3000
+	cities := []string{"Paris", "Lyon", "Kunming"}
+	rg := makeGroupByRowGroup(t, n, cities)
+
+	type key struct {
+		city string
+		age  int64
+	}
+	naiveCount := map[key]int64{}
+	naiveSum := map[key]float64{}
+	citiesCol := rg.ColumnByName("city").Values.(*storage.StringColumn).Values()
+	agesCol := rg.ColumnByName("age").Values.(*storage.Int64Column).Values()
+	pricesCol := rg.ColumnByName("price").Values.(*storage.Float64Column).Values()
+	for i := 0; i < n; i++ {
+		k := key{citiesCol[i], agesCol[i]}
+		naiveCount[k]++
+		naiveSum[k] += pricesCol[i]
+	}
+
+	scan, err := NewScanOp(rg, []string{"age", "price", "city"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := NewGroupByOpMulti(
+		scan,
+		[]int{2, 0}, // city, age — column indexes into the scan projection
+		[]storage.ColumnType{storage.TypeString, storage.TypeInt64},
+		[]AggregateSpec{
+			{Name: "n", ColIndex: 1, Agg: &CountStar{}},
+			{Name: "avg_price", ColIndex: 1, Agg: &Float64Avg{}},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, ok := op.Next()
+	if !ok {
+		t.Fatal("no batch emitted")
+	}
+	if b.Len() != len(naiveCount) {
+		t.Fatalf("group count = %d, want %d", b.Len(), len(naiveCount))
+	}
+
+	// Extract result rows into a map keyed by (city, age).
+	cityOut := b.Vectors[0].Strings()
+	ageOut := b.Vectors[1].Int64s()
+	countOut := b.Vectors[2].Int64s()
+	avgOut := b.Vectors[3].Float64s()
+	for _, i := range b.Sel.Indices() {
+		k := key{cityOut[i], ageOut[i]}
+		wantN, ok := naiveCount[k]
+		if !ok {
+			t.Errorf("unexpected key %+v", k)
+			continue
+		}
+		if countOut[i] != wantN {
+			t.Errorf("key %+v: COUNT(*) = %d, want %d", k, countOut[i], wantN)
+		}
+		wantAvg := naiveSum[k] / float64(wantN)
+		if avgOut[i] != wantAvg {
+			t.Errorf("key %+v: AVG(price) = %v, want %v", k, avgOut[i], wantAvg)
+		}
+	}
+	// Second Next is exhausted.
+	if _, ok := op.Next(); ok {
+		t.Fatal("second Next returned a batch — expected EOF")
+	}
+}
+
+func TestGroupByOpMultiStringString(t *testing.T) {
+	// Two string keys: make sure length-prefix encoding disambiguates
+	// rows like ("a","bc") vs ("ab","c").
+	a := []string{"a", "a", "ab", "ab", "a", "ab", "ab", "a"}
+	b := []string{"bc", "bc", "c", "c", "bc", "c", "d", "bc"}
+	v := []int64{1, 2, 3, 4, 5, 6, 7, 8}
+	aCol := storage.NewColumnChunkNoNulls("a", storage.NewStringColumnFromSlice(a))
+	bCol := storage.NewColumnChunkNoNulls("b", storage.NewStringColumnFromSlice(b))
+	vCol := storage.NewColumnChunkNoNulls("v", storage.NewInt64ColumnFromSlice(v))
+	rg, err := storage.NewRowGroup(aCol, bCol, vCol)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	scan, err := NewScanOp(rg, []string{"a", "b", "v"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := NewGroupByOpMulti(scan,
+		[]int{0, 1},
+		[]storage.ColumnType{storage.TypeString, storage.TypeString},
+		[]AggregateSpec{{Name: "sum_v", ColIndex: 2, Agg: &Int64Sum{}}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, ok := op.Next()
+	if !ok {
+		t.Fatal("no batch")
+	}
+
+	// Expected: ("a","bc")→1+2+5+8=16, ("ab","c")→3+4+6=13, ("ab","d")→7
+	type k struct{ a, b string }
+	naive := map[k]int64{
+		{"a", "bc"}: 16,
+		{"ab", "c"}: 13,
+		{"ab", "d"}: 7,
+	}
+	if batch.Len() != len(naive) {
+		t.Fatalf("groups = %d, want %d (length-prefix encoding must disambiguate prefix-collision pairs)", batch.Len(), len(naive))
+	}
+	aOut := batch.Vectors[0].Strings()
+	bOut := batch.Vectors[1].Strings()
+	sumOut := batch.Vectors[2].Int64s()
+	for _, i := range batch.Sel.Indices() {
+		key := k{aOut[i], bOut[i]}
+		want, ok := naive[key]
+		if !ok {
+			t.Errorf("unexpected key %+v", key)
+			continue
+		}
+		if sumOut[i] != want {
+			t.Errorf("key %+v: SUM(v) = %d, want %d", key, sumOut[i], want)
+		}
+	}
+}
+
+func TestGroupByOpMultiNullsPerColumnDistinct(t *testing.T) {
+	// SQL semantics: (NULL, 'x') and ('y', NULL) are distinct groups.
+	// Two tuples both (NULL, NULL) form one group. Verify the null
+	// tag byte in the composite encoding is what makes this work.
+	n := 6
+	a := []int64{0, 0, 0, 0, 0, 0}
+	bStr := []string{"x", "x", "", "", "", ""}
+	v := []int64{10, 20, 30, 40, 50, 60}
+	aNulls := storage.NewNullBitmap(n)
+	bNulls := storage.NewNullBitmap(n)
+	// rows:
+	// 0: (NULL, "x")
+	// 1: (NULL, "x")   -> same as 0
+	// 2: ("y", NULL) but we have a[2]=0, so make a[2]=7
+	// 3: ("y", NULL) same as 2
+	// 4: (NULL, NULL)
+	// 5: (NULL, NULL) same as 4
+	a[2] = 7
+	a[3] = 7
+	aNulls.SetNull(0)
+	aNulls.SetNull(1)
+	aNulls.SetNull(4)
+	aNulls.SetNull(5)
+	bNulls.SetNull(2)
+	bNulls.SetNull(3)
+	bNulls.SetNull(4)
+	bNulls.SetNull(5)
+
+	aCol, err := storage.NewColumnChunk("a", storage.NewInt64ColumnFromSlice(a), aNulls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bCol, err := storage.NewColumnChunk("b", storage.NewStringColumnFromSlice(bStr), bNulls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vCol := storage.NewColumnChunkNoNulls("v", storage.NewInt64ColumnFromSlice(v))
+	rg, err := storage.NewRowGroup(aCol, bCol, vCol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan, err := NewScanOp(rg, []string{"a", "b", "v"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := NewGroupByOpMulti(scan,
+		[]int{0, 1},
+		[]storage.ColumnType{storage.TypeInt64, storage.TypeString},
+		[]AggregateSpec{{Name: "sum_v", ColIndex: 2, Agg: &Int64Sum{}}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, ok := op.Next()
+	if !ok {
+		t.Fatal("no batch")
+	}
+	if batch.Len() != 3 {
+		t.Fatalf("groups = %d, want 3 ((NULL,\"x\"), (7,NULL), (NULL,NULL))", batch.Len())
+	}
+
+	// Walk groups and verify each distinct null-pattern tuple got
+	// its own ordinal with the right sum.
+	aVec := batch.Vectors[0]
+	bVec := batch.Vectors[1]
+	aVals := aVec.Int64s()
+	bVals := bVec.Strings()
+	sumOut := batch.Vectors[2].Int64s()
+	saw := map[string]int64{}
+	for _, i := range batch.Sel.Indices() {
+		aNull := aVec.IsNull(int(i))
+		bNull := bVec.IsNull(int(i))
+		var tag string
+		switch {
+		case aNull && bNull:
+			tag = "(NULL,NULL)"
+		case aNull && !bNull:
+			tag = "(NULL," + bVals[i] + ")"
+		case !aNull && bNull:
+			tag = fmt.Sprintf("(%d,NULL)", aVals[i])
+		default:
+			tag = fmt.Sprintf("(%d,%s)", aVals[i], bVals[i])
+		}
+		saw[tag] = sumOut[i]
+	}
+	wantSums := map[string]int64{
+		"(NULL,x)":    30,  // 10+20
+		"(7,NULL)":    70,  // 30+40
+		"(NULL,NULL)": 110, // 50+60
+	}
+	for tag, want := range wantSums {
+		if saw[tag] != want {
+			t.Errorf("group %s: SUM(v) = %d, want %d", tag, saw[tag], want)
+		}
+	}
+}
+
+func TestGroupByOpMultiMultiBatchAccumulation(t *testing.T) {
+	// Multi-batch drain through the composite-key path.
+	const n = 3000
+	cities := []string{"A", "B"}
+	rg := makeGroupByRowGroup(t, n, cities)
+
+	type key struct {
+		city string
+		age  int64
+	}
+	naive := map[key]int64{}
+	citiesCol := rg.ColumnByName("city").Values.(*storage.StringColumn).Values()
+	agesCol := rg.ColumnByName("age").Values.(*storage.Int64Column).Values()
+	for i := 0; i < n; i++ {
+		naive[key{citiesCol[i], agesCol[i]}]++
+	}
+
+	scan, err := NewScanOp(rg, []string{"age", "city"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := NewGroupByOpMulti(scan,
+		[]int{1, 0},
+		[]storage.ColumnType{storage.TypeString, storage.TypeInt64},
+		[]AggregateSpec{{Name: "n", ColIndex: 0, Agg: &CountStar{}}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, ok := op.Next()
+	if !ok {
+		t.Fatal("no batch")
+	}
+	if b.Len() != len(naive) {
+		t.Fatalf("groups = %d, want %d", b.Len(), len(naive))
+	}
+	cityOut := b.Vectors[0].Strings()
+	ageOut := b.Vectors[1].Int64s()
+	countOut := b.Vectors[2].Int64s()
+	for _, i := range b.Sel.Indices() {
+		k := key{cityOut[i], ageOut[i]}
+		if countOut[i] != naive[k] {
+			t.Errorf("%+v: count = %d, want %d", k, countOut[i], naive[k])
+		}
+	}
+}
+
+func TestGroupByOpMultiReset(t *testing.T) {
+	const n = 600
+	rg := makeGroupByRowGroup(t, n, []string{"A", "B", "C"})
+	scan, err := NewScanOp(rg, []string{"age", "city"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := NewGroupByOpMulti(scan,
+		[]int{1, 0},
+		[]storage.ColumnType{storage.TypeString, storage.TypeInt64},
+		[]AggregateSpec{{Name: "n", ColIndex: 0, Agg: &CountStar{}}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b1, _ := op.Next()
+	firstGroups := b1.Len()
+	// Collect for comparison.
+	type row struct {
+		c string
+		a int64
+		n int64
+	}
+	collect := func(b *Batch) []row {
+		out := make([]row, 0, b.Len())
+		cities := b.Vectors[0].Strings()
+		ages := b.Vectors[1].Int64s()
+		counts := b.Vectors[2].Int64s()
+		for _, i := range b.Sel.Indices() {
+			out = append(out, row{cities[i], ages[i], counts[i]})
+		}
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].c != out[j].c {
+				return out[i].c < out[j].c
+			}
+			return out[i].a < out[j].a
+		})
+		return out
+	}
+	firstRows := collect(b1)
+
+	op.Reset()
+	b2, _ := op.Next()
+	if b2.Len() != firstGroups {
+		t.Fatalf("after Reset, groups = %d, want %d", b2.Len(), firstGroups)
+	}
+	secondRows := collect(b2)
+	for i := range firstRows {
+		if firstRows[i] != secondRows[i] {
+			t.Errorf("Reset row %d mismatch: first=%+v second=%+v", i, firstRows[i], secondRows[i])
+		}
+	}
+}
+
+func TestNewGroupByOpMultiValidation(t *testing.T) {
+	rg := makeGroupByRowGroup(t, 10, []string{"A"})
+	scan, _ := NewScanOp(rg, []string{"age", "city"})
+
+	mk := func(kci []int, kts []storage.ColumnType, specs []AggregateSpec) error {
+		_, err := NewGroupByOpMulti(scan, kci, kts, specs)
+		return err
+	}
+	if err := mk(nil, nil, []AggregateSpec{{Name: "n", ColIndex: 0, Agg: &CountStar{}}}); err == nil {
+		t.Error("empty key cols: want error")
+	}
+	if err := mk([]int{0, 1}, []storage.ColumnType{storage.TypeInt64}, []AggregateSpec{{Name: "n", ColIndex: 0, Agg: &CountStar{}}}); err == nil {
+		t.Error("mismatched lens: want error")
+	}
+	if err := mk([]int{-1}, []storage.ColumnType{storage.TypeInt64}, []AggregateSpec{{Name: "n", ColIndex: 0, Agg: &CountStar{}}}); err == nil {
+		t.Error("negative keyColIndex: want error")
+	}
+	if err := mk([]int{0}, []storage.ColumnType{storage.TypeFloat64}, []AggregateSpec{{Name: "n", ColIndex: 0, Agg: &CountStar{}}}); err == nil {
+		t.Error("unsupported key type: want error")
+	}
+	if err := mk([]int{0}, []storage.ColumnType{storage.TypeInt64}, nil); err == nil {
+		t.Error("nil specs: want error")
+	}
+	dup := &Int64Sum{}
+	if err := mk([]int{0}, []storage.ColumnType{storage.TypeInt64}, []AggregateSpec{
+		{Name: "a", ColIndex: 0, Agg: dup},
+		{Name: "b", ColIndex: 0, Agg: dup},
+	}); err == nil {
+		t.Error("duplicate aggregator pointer: want error")
+	}
+	if _, err := NewGroupByOpMulti(nil, []int{0}, []storage.ColumnType{storage.TypeInt64}, []AggregateSpec{{Name: "n", ColIndex: 0, Agg: &CountStar{}}}); err == nil {
+		t.Error("nil child: want error")
 	}
 }
 

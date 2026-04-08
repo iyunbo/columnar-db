@@ -120,13 +120,15 @@
 
   <h1>columnar-db — Architecture</h1>
   <p class="subtitle">
-    Static snapshot of the codebase as of Phase 4 Step 4
+    Static snapshot of the codebase as of Phase 4 Step 5
     (<code>main</code>, exec package has the <code>Operator</code> interface +
     <code>ScanOp</code>, <code>FilterOp</code>, <code>ProjectOp</code>,
-    <code>AggregateOp</code> [scalar], <code>GroupByOp</code> [single-key hash],
+    <code>AggregateOp</code> [scalar], <code>GroupByOp</code> [single-key hash
+    fast path + multi-key composite-key path],
     <code>Vector</code>, <code>Batch</code>, <code>Selection</code>,
     <code>Predicate</code>, <code>Aggregator</code> with 9 concrete
-    implementations. Step 5 — multi-key GROUP BY — is next).
+    implementations. Step 5.5 — lift the 1024-group cap via
+    multi-batch emission — is next).
   </p>
 
   <h2>Layered View</h2>
@@ -263,7 +265,7 @@
     <text x="780" y="335" text-anchor="middle" fill="#7ee787" font-weight="700">GroupByOp</text>
     <line x1="722" y1="344" x2="838" y2="344" stroke="#30363d"/>
     <text x="722" y="362" fill="#c9d1d9" font-size="11">hash GROUP BY</text>
-    <text x="722" y="376" fill="#c9d1d9" font-size="11">1 key (int64 | str)</text>
+    <text x="722" y="376" fill="#c9d1d9" font-size="11">1..N keys (int64|str)</text>
   </g>
 
   <!-- Aggregator interface (row 3 right) -->
