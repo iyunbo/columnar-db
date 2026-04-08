@@ -120,7 +120,7 @@
 
   <h1>columnar-db — Architecture</h1>
   <p class="subtitle">
-    Static snapshot of the codebase as of Phase 4 Step 5.5
+    Static snapshot of the codebase as of end of Phase 4
     (<code>main</code>, exec package has the <code>Operator</code> interface +
     <code>ScanOp</code>, <code>FilterOp</code>, <code>ProjectOp</code>,
     <code>AggregateOp</code> [scalar], <code>GroupByOp</code> [single-key hash
@@ -128,7 +128,9 @@
     cursor-based multi-batch emission],
     <code>Vector</code>, <code>Batch</code>, <code>Selection</code>,
     <code>Predicate</code>, <code>Aggregator</code> with 9 concrete
-    implementations. Step 6 — benchmark + decision point — is next).
+    implementations. Phase 4 benchmark decision: high-card 1.67×,
+    low-card 0.80×, zero-alloc on both — kept the architecture.
+    Phase 5 (SQL frontend) is next).
   </p>
 
   <h2>Layered View</h2>

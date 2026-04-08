@@ -81,7 +81,7 @@ during Step 1 review.
   3 batches, multi-key 2121 composite keys across 3 batches);
   Reset works end-to-end on both paths.
 
-### Step 6 — Benchmark + decision point
+### Step 6 — Benchmark + decision point ✓
 - Twin benchmarks: naive row-at-a-time GROUP BY (Go map + per-row
   hash + per-row aggregator updates) vs vectorized `GroupByOp`.
 - 1 M-row fixture, canonical query
@@ -108,6 +108,12 @@ during Step 1 review.
   honestly which workload each shape favours and decide whether the
   architecture's value bracket is wide enough to justify the
   complexity.
+- **Result (recorded in `docs/phase4-benchmark.md`)**: low card
+  **0.80×** (miss), high card **1.67×** (hit, below the 2× stretch).
+  Zero allocations on both regimes vs ~10 000 for naive on high
+  card. Decision: **keep the architecture**, proceed to Phase 5.
+  Low-card loss is the same ScanOp memmove tax Phase 3 identified;
+  filed as ScanOp polish, not a blocker.
 
 ## Working rules (from short-term memory)
 
