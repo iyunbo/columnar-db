@@ -401,8 +401,11 @@ func (g *GroupByOp) Next() (*Batch, bool) {
 		end = g.numGroups
 	}
 
-	// Reset all output vectors + selection so Finalize's append
-	// lands at row 0 of this emission window.
+	// out.Reset() is load-bearing: Aggregator.Finalize APPENDS, so
+	// each emission window needs a zero-length output batch for the
+	// first Finalize to land at row 0. Batch.Reset clears every
+	// Vector's length + null bitmap, so null flags don't leak from
+	// the previous window.
 	g.out.Reset()
 
 	g.emitKeys(start, end)
