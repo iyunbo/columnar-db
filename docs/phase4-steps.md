@@ -62,7 +62,24 @@ during Step 1 review.
   aggregators in one pass.
 - Canonical query:
   `SELECT city, age_bucket, COUNT(*), AVG(price) FROM t GROUP BY city, age_bucket`
-- Initial key strategy: string concat (binary-key follow-up filed).
+- Initial key strategy: length-prefixed byte-buffer composite
+  key + `map[string]int32`. Null tag byte (0x00/0x01) per column so
+  `(NULL, x)` and `(y, NULL)` stay distinct. Binary/open-addressing
+  follow-up filed for after Step 6 benchmarking.
+
+### Step 5.5 — Lift the VectorSize group-count cap
+- Currently `GroupByOp` refuses to assign a `(VectorSize+1)`-th
+  group ordinal because the result Vector's backing slice is
+  `VectorSize (1024)`. Step 6's benchmark requires ~10 000 distinct
+  groups, so this MUST be lifted before Step 6 runs.
+- Approach: convert `Next()` into an emission cursor. First call
+  drains the child and builds the hash table + aggregator state;
+  subsequent calls reset the output batch and emit the next
+  `VectorSize`-sized slice of groups until `emitCursor >= numGroups`.
+- Uses the same `AggregateSpec` / output batch — no API change.
+- Tests: drain a fixture with `> VectorSize` groups through
+  multiple output batches, confirm total groups match the naive
+  baseline, confirm Reset works end-to-end.
 
 ### Step 6 — Benchmark + decision point
 - Twin benchmarks: naive row-at-a-time GROUP BY (Go map + per-row
