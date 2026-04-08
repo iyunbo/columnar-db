@@ -148,25 +148,14 @@ type AggregateOp struct {
 // optional interface, but that requires flipping the negative-index
 // validation. Filed as a Step 5 / planning cleanup.
 func NewAggregateOp(child Operator, specs []AggregateSpec) (*AggregateOp, error) {
-	if len(specs) == 0 {
-		return nil, fmt.Errorf("exec: AggregateOp requires at least one aggregator spec")
+	if err := validateAggregateSpecs("AggregateOp", specs); err != nil {
+		return nil, err
 	}
-	seen := make(map[Aggregator]struct{}, len(specs))
 	out := &Batch{
 		Vectors: make([]*Vector, len(specs)),
 		Sel:     NewSelection(),
 	}
 	for i, s := range specs {
-		if s.Agg == nil {
-			return nil, fmt.Errorf("exec: AggregateSpec[%d] (%q) has nil Aggregator", i, s.Name)
-		}
-		if s.ColIndex < 0 {
-			return nil, fmt.Errorf("exec: AggregateSpec[%d] (%q) has negative ColIndex %d", i, s.Name, s.ColIndex)
-		}
-		if _, dup := seen[s.Agg]; dup {
-			return nil, fmt.Errorf("exec: AggregateSpec[%d] (%q) reuses an Aggregator instance already used by an earlier spec; each spec needs its own Aggregator", i, s.Name)
-		}
-		seen[s.Agg] = struct{}{}
 		out.Vectors[i] = NewVector(s.Agg.OutputType())
 		s.Agg.Init(1)
 	}
@@ -175,6 +164,32 @@ func NewAggregateOp(child Operator, specs []AggregateSpec) (*AggregateOp, error)
 		specs: specs,
 		out:   out,
 	}, nil
+}
+
+// validateAggregateSpecs enforces the shared invariants for any
+// operator that accepts a []AggregateSpec (currently AggregateOp and
+// GroupByOp/GroupByOpMulti): non-empty, no nil Agg, non-negative
+// ColIndex, no duplicate Aggregator pointer across specs. `opName`
+// is interpolated into the error prefix so the caller knows which
+// operator rejected the spec.
+func validateAggregateSpecs(opName string, specs []AggregateSpec) error {
+	if len(specs) == 0 {
+		return fmt.Errorf("exec: %s requires at least one aggregator spec", opName)
+	}
+	seen := make(map[Aggregator]struct{}, len(specs))
+	for i, s := range specs {
+		if s.Agg == nil {
+			return fmt.Errorf("exec: %s AggregateSpec[%d] (%q) has nil Aggregator", opName, i, s.Name)
+		}
+		if s.ColIndex < 0 {
+			return fmt.Errorf("exec: %s AggregateSpec[%d] (%q) has negative ColIndex %d", opName, i, s.Name, s.ColIndex)
+		}
+		if _, dup := seen[s.Agg]; dup {
+			return fmt.Errorf("exec: %s AggregateSpec[%d] (%q) reuses an Aggregator instance already used by an earlier spec; each spec needs its own Aggregator", opName, i, s.Name)
+		}
+		seen[s.Agg] = struct{}{}
+	}
+	return nil
 }
 
 // Next drains all batches from the child, updating every aggregator

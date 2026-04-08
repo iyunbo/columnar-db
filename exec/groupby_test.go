@@ -55,51 +55,44 @@ func drainGroupBy(t *testing.T, op *GroupByOp) *Batch {
 	return b
 }
 
-// collectInt64KeyedBatch reads a result batch whose key column is
-// int64 into a map[int64][]any, one entry per aggregator output,
-// for ergonomic comparison with a naive baseline.
+// aggRowValues reads batch row `i`'s aggregator columns into a
+// []any suitable for naive-baseline comparison. firstAggCol is the
+// index of the first aggregator column (1 for single-key batches).
+func aggRowValues(b *Batch, i uint16, firstAggCol int) []any {
+	row := make([]any, len(b.Vectors)-firstAggCol)
+	for ci := firstAggCol; ci < len(b.Vectors); ci++ {
+		v := b.Vectors[ci]
+		if v.IsNull(int(i)) {
+			row[ci-firstAggCol] = nil
+			continue
+		}
+		switch v.Type {
+		case storage.TypeInt64:
+			row[ci-firstAggCol] = v.Int64s()[i]
+		case storage.TypeFloat64:
+			row[ci-firstAggCol] = v.Float64s()[i]
+		}
+	}
+	return row
+}
+
+// collectInt64KeyedBatch reads a single-int64-key result batch into
+// a map[int64][]any (values = aggregator outputs in schema order).
 func collectInt64KeyedBatch(b *Batch) map[int64][]any {
 	out := map[int64][]any{}
 	keys := b.Vectors[0].Int64s()
 	for _, i := range b.Sel.Indices() {
-		row := make([]any, len(b.Vectors)-1)
-		for ci := 1; ci < len(b.Vectors); ci++ {
-			v := b.Vectors[ci]
-			if v.IsNull(int(i)) {
-				row[ci-1] = nil
-				continue
-			}
-			switch v.Type {
-			case storage.TypeInt64:
-				row[ci-1] = v.Int64s()[i]
-			case storage.TypeFloat64:
-				row[ci-1] = v.Float64s()[i]
-			}
-		}
-		out[keys[i]] = row
+		out[keys[i]] = aggRowValues(b, i, 1)
 	}
 	return out
 }
 
+// collectStringKeyedBatch reads a single-string-key result batch.
 func collectStringKeyedBatch(b *Batch) map[string][]any {
 	out := map[string][]any{}
 	keys := b.Vectors[0].Strings()
 	for _, i := range b.Sel.Indices() {
-		row := make([]any, len(b.Vectors)-1)
-		for ci := 1; ci < len(b.Vectors); ci++ {
-			v := b.Vectors[ci]
-			if v.IsNull(int(i)) {
-				row[ci-1] = nil
-				continue
-			}
-			switch v.Type {
-			case storage.TypeInt64:
-				row[ci-1] = v.Int64s()[i]
-			case storage.TypeFloat64:
-				row[ci-1] = v.Float64s()[i]
-			}
-		}
-		out[keys[i]] = row
+		out[keys[i]] = aggRowValues(b, i, 1)
 	}
 	return out
 }
