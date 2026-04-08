@@ -120,7 +120,7 @@
 
   <h1>columnar-db — Architecture</h1>
   <p class="subtitle">
-    Static snapshot of the codebase as of end of Phase 4
+    Static snapshot of the codebase as of Phase 5 Step 1
     (<code>main</code>, exec package has the <code>Operator</code> interface +
     <code>ScanOp</code>, <code>FilterOp</code>, <code>ProjectOp</code>,
     <code>AggregateOp</code> [scalar], <code>GroupByOp</code> [single-key hash
@@ -128,9 +128,11 @@
     cursor-based multi-batch emission],
     <code>Vector</code>, <code>Batch</code>, <code>Selection</code>,
     <code>Predicate</code>, <code>Aggregator</code> with 9 concrete
-    implementations. Phase 4 benchmark decision: high-card 1.67×,
-    low-card 0.80×, zero-alloc on both — kept the architecture.
-    Phase 5 (SQL frontend) is next).
+    implementations. New <code>sql/</code> package: skeleton only —
+    <code>Token</code>/<code>TokenKind</code> types, lexer + Execute
+    stubs; full Lexer → Parser → Planner lands Steps 2–6. The SVG
+    layer diagram below will gain an <code>sql/</code> box in Step 5
+    once the planner is wired up).
   </p>
 
   <h2>Layered View</h2>
