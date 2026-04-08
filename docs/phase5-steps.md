@@ -54,9 +54,12 @@ column_list := column_ref ("," column_ref)*
   RowGroup supplied by the caller
 - Arithmetic or function expressions in SELECT
   (`SELECT price * 1.1`) → later phase
-- Compound predicates with AND/OR — existing FilterOp can stack,
-  but the Phase 5 parser stays minimal; AND handled in Step 4
-  polish if trivial
+- Compound predicates with AND/OR — `FilterOp` supports AND only
+  by *chaining* two `FilterOp` instances, not by evaluating a
+  predicate tree in one op. OR has no current operator-level
+  support. Phase 5 Step 4 ships single-predicate WHERE only;
+  `a AND b` as two chained `FilterOp`s is filed as Step 4.5
+  polish if trivial, OR is deferred entirely
 - Quoted identifiers, case-insensitive matching for column names,
   SQL NULL literal — documented limitations, not bugs
 
@@ -66,11 +69,15 @@ column_list := column_ref ("," column_ref)*
 - This plan doc.
 - Package skeleton: `sql/` directory with `token.go` (token
   types), `lexer.go` (stub or first working cut), and a top-level
-  `sql.Execute(rg, query) ([]*exec.Batch, error)` entry point
-  that currently just errors "not implemented". Lets downstream
-  steps plug in incrementally.
-- `docs/architecture.html`: add a new `sql/` layer box above
-  `exec/` showing Lexer → Parser → Planner → exec operators.
+  `sql.Execute(rg, query) (exec.Operator, error)` entry point
+  that currently just errors "not implemented". Returning an
+  `exec.Operator` (not a materialized `[]*Batch`) keeps the
+  streaming + `Reset()` contract every other layer already
+  follows. Lets downstream steps plug in incrementally.
+- `docs/architecture.html`: subtitle bump in Step 1; the full
+  `sql/` layer box in the SVG layer diagram lands in Step 2 (real
+  Lexer ships) — subsequent steps update the diagram in-PR per
+  the architecture-doc memory rule.
 - **No query execution yet.** This PR is the structural commitment.
 
 ### Step 2 — Tokenizer
@@ -96,6 +103,11 @@ column_list := column_ref ("," column_ref)*
   this step: just `ScanOp` with the requested projection. Uses
   the RowGroup's schema to validate column names and compute
   column indexes.
+- **Table-name handling**: `Execute(rg, query)` takes a single
+  RowGroup, and the `FROM` identifier is **ignored** for Phase 5
+  — any identifier parses successfully. Multi-table catalog
+  support is a Phase 6+ concern. Locking this in now so Step 3
+  doesn't stall on the decision mid-implementation.
 - Integration test: `sql.Execute(rg, "SELECT name, age FROM t")`
   vs hand-wired `ScanOp` producing byte-identical batches on a
   small fixture.
@@ -104,9 +116,17 @@ column_list := column_ref ("," column_ref)*
 - Parser: extend with `WHERE column_ref comparator literal` (one
   predicate only for Step 4 — AND/OR polish filed for Step 4.5).
 - Planner: insert `FilterOp` between `ScanOp` and the top of the
-  tree. Literal type is converted to match the column type;
-  planner rejects a mismatch with a clear error rather than a
-  silent coercion.
+  tree. Literal-to-column coercion rules, decided up front:
+    - Int literal + `Int64` column → use literal as-is.
+    - Float literal + `Float64` column → use literal as-is.
+    - Int literal + `Float64` column → implicit widen to float64.
+    - Float literal + `Int64` column → planner error (no silent
+      truncation).
+    - String literal + `String` column → use as-is.
+    - Any other combination → planner error with column name,
+      column type, literal type in the message.
+  The planner picks the correct typed predicate (`Int64Gt`,
+  `StringEq`, …) based on the column type.
 - Integration test: `SELECT age FROM t WHERE age > 30` matches
   hand-wired `Scan → Filter`. Include one test for a type
   mismatch and assert the planner's error message.
