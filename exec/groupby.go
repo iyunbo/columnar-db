@@ -130,6 +130,15 @@ type GroupByOp struct {
 	// row's composite key during ingestBatchMulti. Reused across
 	// rows; never re-allocated in steady state.
 	compositeBuf []byte
+	// keyVecsScratch / keyVecInt64sScratch / keyVecStringsScratch
+	// are operator-level scratch slices resized in place at the top
+	// of each ingestBatchMulti call, so the per-batch ingest path
+	// does not allocate. Lengths == numKeyCols; the int64s/strings
+	// scratches hold pre-hoisted typed views of each key column's
+	// Values (fetching them once per batch instead of once per row).
+	keyVecsScratch        []*Vector
+	keyVecInt64sScratch   [][]int64
+	keyVecStringsScratch  [][]string
 
 	specs []AggregateSpec
 
@@ -348,7 +357,10 @@ func NewGroupByOpMulti(child Operator, keyColIndexes []int, keyTypes []storage.C
 		// buffer — enough for 4-6 mixed-type columns without a
 		// re-alloc on the hot path. Grows as needed on first wide
 		// row, then steady-state reuse.
-		compositeBuf: make([]byte, 0, 64),
+		compositeBuf:         make([]byte, 0, 64),
+		keyVecsScratch:       make([]*Vector, len(kci)),
+		keyVecInt64sScratch:  make([][]int64, len(kci)),
+		keyVecStringsScratch: make([][]string, len(kci)),
 	}
 	return op, nil
 }
@@ -620,9 +632,13 @@ func (g *GroupByOp) ingestBatchMulti(b *Batch) error {
 	if len(indices) == 0 {
 		return nil
 	}
-	// Validate key column types against the child batch once per
-	// batch; cheap enough to not pull out.
-	keyVecs := make([]*Vector, g.numKeyCols)
+	// Validate key column types against the child batch and hoist
+	// each key column's Vector + typed slice view into the
+	// operator-level scratch slices. Fetching the typed view once
+	// per batch (instead of once per row) is important: it keeps
+	// the per-row encode loop clean and avoids a steady-state
+	// slice allocation for the keyVecs array.
+	keyVecs := g.keyVecsScratch
 	for i, ci := range g.keyColIndexes {
 		if ci >= len(b.Vectors) {
 			return fmt.Errorf("exec: GroupByOpMulti keyColIndex[%d]=%d out of range for batch (len %d)", i, ci, len(b.Vectors))
@@ -632,7 +648,17 @@ func (g *GroupByOp) ingestBatchMulti(b *Batch) error {
 			return fmt.Errorf("exec: GroupByOpMulti key column %d type mismatch: expected %s, got %s", i, g.keyTypes[i], v.Type)
 		}
 		keyVecs[i] = v
+		switch g.keyTypes[i] {
+		case storage.TypeInt64:
+			g.keyVecInt64sScratch[i] = v.Int64s()
+			g.keyVecStringsScratch[i] = nil
+		case storage.TypeString:
+			g.keyVecStringsScratch[i] = v.Strings()
+			g.keyVecInt64sScratch[i] = nil
+		}
 	}
+	keyInt64s := g.keyVecInt64sScratch
+	keyStrings := g.keyVecStringsScratch
 
 	g.groupIDs = g.groupIDs[:0]
 
@@ -654,10 +680,10 @@ func (g *GroupByOp) ingestBatchMulti(b *Batch) error {
 			switch g.keyTypes[i] {
 			case storage.TypeInt64:
 				var tmp [8]byte
-				binary.LittleEndian.PutUint64(tmp[:], uint64(kv.Int64s()[rowIdx]))
+				binary.LittleEndian.PutUint64(tmp[:], uint64(keyInt64s[i][rowIdx]))
 				g.compositeBuf = append(g.compositeBuf, tmp[:]...)
 			case storage.TypeString:
-				s := kv.Strings()[rowIdx]
+				s := keyStrings[i][rowIdx]
 				var lenTmp [4]byte
 				binary.LittleEndian.PutUint32(lenTmp[:], uint32(len(s)))
 				g.compositeBuf = append(g.compositeBuf, lenTmp[:]...)
@@ -689,13 +715,13 @@ func (g *GroupByOp) ingestBatchMulti(b *Batch) error {
 					if isNull {
 						g.multiKeyInt64s[i] = append(g.multiKeyInt64s[i], 0)
 					} else {
-						g.multiKeyInt64s[i] = append(g.multiKeyInt64s[i], kv.Int64s()[rowIdx])
+						g.multiKeyInt64s[i] = append(g.multiKeyInt64s[i], keyInt64s[i][rowIdx])
 					}
 				case storage.TypeString:
 					if isNull {
 						g.multiKeyStrings[i] = append(g.multiKeyStrings[i], "")
 					} else {
-						g.multiKeyStrings[i] = append(g.multiKeyStrings[i], kv.Strings()[rowIdx])
+						g.multiKeyStrings[i] = append(g.multiKeyStrings[i], keyStrings[i][rowIdx])
 					}
 				}
 			}
