@@ -12,17 +12,12 @@ import (
 // yields the result batches.
 //
 // Phase 5 scope: a single in-memory RowGroup is the table. The
-// FROM clause's identifier is validated against a caller-chosen
-// table name (to be decided in Step 3). No multi-table catalog,
-// no JOINs.
+// FROM clause's identifier is ignored; multi-table catalog
+// support is filed for Phase 6+.
 //
-// Step 1: this entry point returns an error for every input
-// because the lexer/parser/planner are stubs. Step 3 is the first
-// step that makes the happy path work.
-//
-// Design note: Execute returns an Operator, not a []*Batch, so
-// callers can stream results and reuse the operator via Reset().
-// It mirrors the shape every Phase 2–4 operator already uses.
+// Execute returns an exec.Operator (not []*Batch) so callers can
+// stream results and reuse via Reset(), matching every other
+// layer's contract.
 func Execute(rg *storage.RowGroup, query string) (exec.Operator, error) {
 	if rg == nil {
 		return nil, fmt.Errorf("sql: Execute requires a non-nil RowGroup")
@@ -30,11 +25,8 @@ func Execute(rg *storage.RowGroup, query string) (exec.Operator, error) {
 	if query == "" {
 		return nil, fmt.Errorf("sql: Execute requires a non-empty query")
 	}
-	tokens, err := Tokenize(query)
-	if err != nil {
+	if _, err := Tokenize(query); err != nil {
 		return nil, err
 	}
-	_ = tokens
-	// Step 3 wires up: ast, err := Parse(tokens); plan.Build(rg, ast).
-	return nil, fmt.Errorf("sql: Execute is not implemented yet (Phase 5 Step 3)")
+	return nil, fmt.Errorf("sql: Execute not implemented")
 }
