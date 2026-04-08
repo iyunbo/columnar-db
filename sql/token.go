@@ -16,7 +16,7 @@
 // LIMIT, no DDL / DML. See docs/phase5-steps.md for the full
 // grammar and the list of explicit non-goals.
 //
-// Package layout (filled in across Step 1–6):
+// Package layout:
 //
 //	token.go    Token kinds + Token struct
 //	lexer.go    Lexer (input string → []Token)
