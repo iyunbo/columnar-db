@@ -872,29 +872,25 @@ func TestGroupByOpMultiMatchesSingleKeyConstructor(t *testing.T) {
 	}
 }
 
-func TestGroupByOpMultiCapOverflowThenReset(t *testing.T) {
-	// Cap-overflow path on the multi-key ingest: push > VectorSize
-	// distinct composite keys, confirm sticky error, Reset, then
-	// drain a smaller fixture through the same operator and verify
-	// it produces correct results (no leaked state from the poisoned
-	// first iteration).
-	//
-	// First fixture: (VectorSize + 50) distinct int64 pairs
-	//   (i, i) — every row a new group.
-	bigN := VectorSize + 50
+func TestGroupByOpMultiLargeCardinalityMultiBatch(t *testing.T) {
+	// Step 5.5: multi-key composite GROUP BY with > VectorSize
+	// distinct groups must emit across multiple output batches.
+	// Uses a pair-of-int64 composite key where every row is a
+	// new group so numGroups == bigN.
+	bigN := VectorSize*2 + 73 // 2121 unique (i,i) pairs → 3 batches
 	ka := make([]int64, bigN)
 	kb := make([]int64, bigN)
 	for i := 0; i < bigN; i++ {
 		ka[i] = int64(i)
-		kb[i] = int64(i)
+		kb[i] = int64(i * 3)
 	}
 	kaChunk := storage.NewColumnChunkNoNulls("ka", storage.NewInt64ColumnFromSlice(ka))
 	kbChunk := storage.NewColumnChunkNoNulls("kb", storage.NewInt64ColumnFromSlice(kb))
-	rgBig, err := storage.NewRowGroup(kaChunk, kbChunk)
+	rg, err := storage.NewRowGroup(kaChunk, kbChunk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scan, err := NewScanOp(rgBig, []string{"ka", "kb"})
+	scan, err := NewScanOp(rg, []string{"ka", "kb"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -906,46 +902,57 @@ func TestGroupByOpMultiCapOverflowThenReset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := op.Next(); ok {
-		t.Error("expected (nil, false) on cap overflow")
+	got := map[[2]int64]int64{}
+	batches := 0
+	total := 0
+	for {
+		b, ok := op.Next()
+		if !ok {
+			break
+		}
+		batches++
+		total += b.Len()
+		if b.Len() > VectorSize {
+			t.Errorf("batch %d Len()=%d exceeds VectorSize", batches, b.Len())
+		}
+		kaOut := b.Vectors[0].Int64s()
+		kbOut := b.Vectors[1].Int64s()
+		counts := b.Vectors[2].Int64s()
+		for _, i := range b.Sel.Indices() {
+			got[[2]int64{kaOut[i], kbOut[i]}] = counts[i]
+		}
 	}
-	if op.Err() == nil {
-		t.Fatal("expected sticky error after cap overflow")
-	}
-	if op.numGroups > VectorSize {
-		t.Errorf("numGroups = %d exceeded cap %d", op.numGroups, VectorSize)
-	}
-
-	// Swap child for a small fixture (white-box: op.child is
-	// unexported but accessible from the same package) and Reset.
-	smallN := 50
-	ka2 := make([]int64, smallN)
-	kb2 := make([]int64, smallN)
-	for i := 0; i < smallN; i++ {
-		ka2[i] = int64(i % 5)
-		kb2[i] = int64(i % 3)
-	}
-	kaC2 := storage.NewColumnChunkNoNulls("ka", storage.NewInt64ColumnFromSlice(ka2))
-	kbC2 := storage.NewColumnChunkNoNulls("kb", storage.NewInt64ColumnFromSlice(kb2))
-	rgSmall, err := storage.NewRowGroup(kaC2, kbC2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scan2, _ := NewScanOp(rgSmall, []string{"ka", "kb"})
-	op.child = scan2
-	op.Reset()
 	if op.Err() != nil {
-		t.Errorf("Err() after Reset = %v, want nil", op.Err())
+		t.Fatalf("unexpected Err(): %v", op.Err())
+	}
+	if batches < 3 {
+		t.Errorf("batches = %d, want ≥ 3 for %d groups", batches, bigN)
+	}
+	if total != bigN {
+		t.Errorf("total rows = %d, want %d", total, bigN)
+	}
+	if len(got) != bigN {
+		t.Errorf("distinct groups = %d, want %d", len(got), bigN)
+	}
+	for i := 0; i < bigN; i++ {
+		k := [2]int64{int64(i), int64(i * 3)}
+		if got[k] != 1 {
+			t.Errorf("group %v: COUNT(*) = %d, want 1", k, got[k])
+		}
 	}
 
-	b, ok := op.Next()
-	if !ok {
-		t.Fatal("no batch emitted after Reset")
+	// Reset re-enables a second full drain.
+	op.Reset()
+	second := 0
+	for {
+		b, ok := op.Next()
+		if !ok {
+			break
+		}
+		second += b.Len()
 	}
-	// Expected: 5 * 3 = 15 distinct (ka%5, kb%3) combinations,
-	// bounded by smallN=50, so all 15 should appear with counts.
-	if b.Len() != 15 {
-		t.Errorf("after Reset: groups = %d, want 15", b.Len())
+	if second != bigN {
+		t.Errorf("after Reset: re-drained rows = %d, want %d", second, bigN)
 	}
 }
 
@@ -1001,12 +1008,12 @@ func TestGroupByOpMultiIngestBatchIsZeroAlloc(t *testing.T) {
 	}
 }
 
-func TestGroupByOpTooManyGroupsErrs(t *testing.T) {
-	// Step 4 limitation: ≤ VectorSize (1024) distinct groups, because
-	// the result Vector's backing slice is VectorSize. Step 5 will
-	// lift this. Until then, exceeding the cap must surface as a
-	// sticky error on Err() and Next() must stop early.
-	n := VectorSize + 100 // 1124 unique keys
+func TestGroupByOpLargeCardinalityMultiBatch(t *testing.T) {
+	// Step 5.5: > VectorSize distinct groups must emit across
+	// multiple output batches, preserving every group's COUNT(*).
+	// Previously (Step 4) this was a hard cap; the cursor-based
+	// emission lifts it.
+	n := VectorSize*2 + 137 // 2185 unique keys → 3 output batches
 	keys := make([]int64, n)
 	for i := range n {
 		keys[i] = int64(i)
@@ -1026,26 +1033,58 @@ func TestGroupByOpTooManyGroupsErrs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, ok := op.Next()
-	if ok || b != nil {
-		t.Fatalf("expected (nil, false) on group-cap overflow, got (%v, %v)", b, ok)
+
+	// Drain across all emitted batches, collecting totals.
+	got := map[int64]int64{}
+	batchCount := 0
+	totalRows := 0
+	for {
+		b, ok := op.Next()
+		if !ok {
+			break
+		}
+		batchCount++
+		totalRows += b.Len()
+		if b.Len() > VectorSize {
+			t.Errorf("batch %d Len()=%d exceeds VectorSize=%d", batchCount, b.Len(), VectorSize)
+		}
+		keysOut := b.Vectors[0].Int64s()
+		countsOut := b.Vectors[1].Int64s()
+		for _, i := range b.Sel.Indices() {
+			got[keysOut[i]] = countsOut[i]
+		}
 	}
-	if op.Err() == nil {
-		t.Error("expected sticky error on Err(), got nil")
-	}
-	// numGroups must not have ballooned past the cap — the check is
-	// inside the probe loop, not at batch end.
-	if op.numGroups > VectorSize {
-		t.Errorf("numGroups = %d exceeded cap %d (check fires too late)", op.numGroups, VectorSize)
-	}
-	if len(op.keysInt64) > VectorSize {
-		t.Errorf("keysInt64 len = %d exceeded cap %d", len(op.keysInt64), VectorSize)
-	}
-	// Reset must clear the sticky error and let a subsequent drain
-	// work again (over a smaller input).
-	op.Reset()
 	if op.Err() != nil {
-		t.Errorf("Err() after Reset = %v, want nil", op.Err())
+		t.Fatalf("unexpected Err(): %v", op.Err())
+	}
+	if batchCount < 3 {
+		t.Errorf("batch count = %d, want ≥ 3 for %d groups", batchCount, n)
+	}
+	if totalRows != n {
+		t.Errorf("total emitted rows = %d, want %d", totalRows, n)
+	}
+	if len(got) != n {
+		t.Errorf("distinct groups emitted = %d, want %d", len(got), n)
+	}
+	for k := int64(0); k < int64(n); k++ {
+		if got[k] != 1 {
+			t.Errorf("key %d: COUNT(*) = %d, want 1", k, got[k])
+		}
+	}
+
+	// Reset must clear the cursor and let a second drain re-emit
+	// the same result.
+	op.Reset()
+	second := 0
+	for {
+		b, ok := op.Next()
+		if !ok {
+			break
+		}
+		second += b.Len()
+	}
+	if second != n {
+		t.Errorf("after Reset: re-drained rows = %d, want %d", second, n)
 	}
 }
 
