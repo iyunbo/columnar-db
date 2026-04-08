@@ -112,6 +112,11 @@ type GroupByOp struct {
 	out *Batch
 	// done is true after the first Next() emits the result batch.
 	done bool
+	// err is a sticky error set by ingestBatch when it cannot proceed
+	// (currently only: Step 4 group-count cap exceeded). Once set,
+	// Next() returns (nil, false) and the operator is poisoned until
+	// Reset() clears it. Callers inspect via Err().
+	err error
 }
 
 // NewGroupByOp constructs a hash-GROUP-BY operator over child, grouping
@@ -153,8 +158,9 @@ func NewGroupByOp(child Operator, keyColIndex int, keyType storage.ColumnType, s
 		seen[s.Agg] = struct{}{}
 		out.Vectors[1+i] = NewVector(s.Agg.OutputType())
 		// No Init here — numGroups starts at 0, every aggregator gets
-		// a first Grow(numGroups) before its first Update call.
-		s.Agg.Init(0)
+		// a first Grow(numGroups) per ingested batch before its first
+		// Update call. The Aggregator contract allows a nil state slice
+		// at this point; Grow's `make+copy` path handles it.
 	}
 
 	op := &GroupByOp{
@@ -176,11 +182,25 @@ func NewGroupByOp(child Operator, keyColIndex int, keyType storage.ColumnType, s
 	return op, nil
 }
 
+// Err returns the sticky error set by the most recent ingest, or nil.
+// Callers should consult Err() after Next() returns (nil, false) when
+// the query was not supposed to be empty, to distinguish EOF from
+// failure. Cleared by Reset.
+//
+// The Operator interface does not expose Err() yet; Step 5/Phase 5 is
+// the right time to fold error propagation into the core interface.
+// Until then, callers that need error detection must type-assert to
+// *GroupByOp (or use the sibling AggregateOp, which has no
+// recoverable error yet).
+func (g *GroupByOp) Err() error { return g.err }
+
 // Next drains the child, builds the hash table + aggregator state,
 // then emits the result batch. Subsequent calls return (nil, false)
-// until Reset.
+// until Reset. If ingestBatch sets a sticky error (Step 4 group-cap
+// overflow), Next returns (nil, false) immediately and Err() returns
+// that error.
 func (g *GroupByOp) Next() (*Batch, bool) {
-	if g.done {
+	if g.done || g.err != nil {
 		return nil, false
 	}
 
@@ -190,10 +210,9 @@ func (g *GroupByOp) Next() (*Batch, bool) {
 			break
 		}
 		if err := g.ingestBatch(b); err != nil {
-			// Step 4: the only recoverable error is "too many groups".
-			// The operator pipeline does not have an error channel yet
-			// (see Phase 5 planning) so we panic with a clear message.
-			panic(err)
+			g.err = err
+			g.done = true
+			return nil, false
 		}
 	}
 
@@ -240,11 +259,21 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 		return fmt.Errorf("exec: GroupByOp key column type mismatch: expected %s, got %s", g.keyType, keyVec.Type)
 	}
 
-	// Reuse the per-batch groupIDs buffer.
+	// Reuse the per-batch groupIDs buffer. The buffer is preallocated
+	// to VectorSize at construction and indices is always ≤ VectorSize
+	// (upstream batches never exceed VectorSize), so no re-grow is
+	// possible in steady state.
 	g.groupIDs = g.groupIDs[:0]
-	if cap(g.groupIDs) < len(indices) {
-		g.groupIDs = make([]int32, 0, len(indices))
-	}
+
+	// Step 4 group-count cap: the result Vector's backing slice is
+	// VectorSize (1024), so we refuse to assign a (VectorSize+1)-th
+	// ordinal. Checked INSIDE the probe loop, before the assignment —
+	// checking it only at batch end would let a pathological batch
+	// balloon numGroups and keysInt64 far past the cap before we
+	// noticed. On overflow we set the sticky error, stop ingesting
+	// (the partially-built groupIDs buffer is safe to abandon because
+	// we never called Update), and the caller picks it up via Err().
+	capErr := fmt.Errorf("exec: GroupByOp exceeded Step 4 group-count cap of %d; Step 5 will lift this", VectorSize)
 
 	switch g.keyType {
 	case storage.TypeInt64:
@@ -256,6 +285,9 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 				k := vals[i]
 				gid, ok := ht[k]
 				if !ok {
+					if g.numGroups >= VectorSize {
+						return capErr
+					}
 					gid = int32(g.numGroups)
 					ht[k] = gid
 					g.keysInt64 = append(g.keysInt64, k)
@@ -267,6 +299,9 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 			for _, i := range indices {
 				if nulls.IsNull(int(i)) {
 					if !g.hasNullGroup {
+						if g.numGroups >= VectorSize {
+							return capErr
+						}
 						g.nullGroupID = int32(g.numGroups)
 						g.hasNullGroup = true
 						g.keysInt64 = append(g.keysInt64, 0)
@@ -278,6 +313,9 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 				k := vals[i]
 				gid, ok := ht[k]
 				if !ok {
+					if g.numGroups >= VectorSize {
+						return capErr
+					}
 					gid = int32(g.numGroups)
 					ht[k] = gid
 					g.keysInt64 = append(g.keysInt64, k)
@@ -295,6 +333,9 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 				k := vals[i]
 				gid, ok := ht[k]
 				if !ok {
+					if g.numGroups >= VectorSize {
+						return capErr
+					}
 					gid = int32(g.numGroups)
 					ht[k] = gid
 					g.keysString = append(g.keysString, k)
@@ -306,6 +347,9 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 			for _, i := range indices {
 				if nulls.IsNull(int(i)) {
 					if !g.hasNullGroup {
+						if g.numGroups >= VectorSize {
+							return capErr
+						}
 						g.nullGroupID = int32(g.numGroups)
 						g.hasNullGroup = true
 						g.keysString = append(g.keysString, "")
@@ -317,6 +361,9 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 				k := vals[i]
 				gid, ok := ht[k]
 				if !ok {
+					if g.numGroups >= VectorSize {
+						return capErr
+					}
 					gid = int32(g.numGroups)
 					ht[k] = gid
 					g.keysString = append(g.keysString, k)
@@ -325,13 +372,6 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 				g.groupIDs = append(g.groupIDs, gid)
 			}
 		}
-	}
-
-	// Step 4 group-count cap: the result Vector is a single VectorSize-
-	// wide slice. Step 5 will lift this by emitting multiple output
-	// batches or growing the result Vector.
-	if g.numGroups > VectorSize {
-		return fmt.Errorf("exec: GroupByOp exceeded Step 4 group-count cap of %d (got %d); Step 5 will lift this", VectorSize, g.numGroups)
 	}
 
 	// Grow every aggregator's per-group state once for this batch,
@@ -347,23 +387,36 @@ func (g *GroupByOp) ingestBatch(b *Batch) error {
 // per group in ordinal order. Keys were recorded into keysInt64 /
 // keysString during ingestBatch in first-seen order, so this is a
 // straight walk — no allocation, no map iteration.
+//
+// The null-group branch is hoisted out of the per-row loop: we emit
+// [0, nullGroupID), one AppendNull, then (nullGroupID, numGroups),
+// so the tight loop body is a single typed append with no per-row
+// branch on hasNullGroup.
 func (g *GroupByOp) emitKeys() {
 	keyOut := g.out.Vectors[0]
+	nullCut := g.numGroups // sentinel "no split"
+	if g.hasNullGroup {
+		nullCut = int(g.nullGroupID)
+	}
 	switch g.keyType {
 	case storage.TypeInt64:
-		for gid := 0; gid < g.numGroups; gid++ {
-			if g.hasNullGroup && int32(gid) == g.nullGroupID {
-				_ = keyOut.AppendNull()
-				continue
-			}
+		for gid := 0; gid < nullCut; gid++ {
+			_ = keyOut.AppendInt64(g.keysInt64[gid])
+		}
+		if g.hasNullGroup {
+			_ = keyOut.AppendNull()
+		}
+		for gid := nullCut + 1; gid < g.numGroups; gid++ {
 			_ = keyOut.AppendInt64(g.keysInt64[gid])
 		}
 	case storage.TypeString:
-		for gid := 0; gid < g.numGroups; gid++ {
-			if g.hasNullGroup && int32(gid) == g.nullGroupID {
-				_ = keyOut.AppendNull()
-				continue
-			}
+		for gid := 0; gid < nullCut; gid++ {
+			_ = keyOut.AppendString(g.keysString[gid])
+		}
+		if g.hasNullGroup {
+			_ = keyOut.AppendNull()
+		}
+		for gid := nullCut + 1; gid < g.numGroups; gid++ {
 			_ = keyOut.AppendString(g.keysString[gid])
 		}
 	}
@@ -391,4 +444,5 @@ func (g *GroupByOp) Reset() {
 	g.keysInt64 = g.keysInt64[:0]
 	g.keysString = g.keysString[:0]
 	g.done = false
+	g.err = nil
 }

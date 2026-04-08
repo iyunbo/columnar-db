@@ -458,12 +458,11 @@ func TestNewGroupByOpValidation(t *testing.T) {
 	}
 }
 
-func TestGroupByOpTooManyGroupsPanics(t *testing.T) {
+func TestGroupByOpTooManyGroupsErrs(t *testing.T) {
 	// Step 4 limitation: ≤ VectorSize (1024) distinct groups, because
 	// the result Vector's backing slice is VectorSize. Step 5 will
-	// lift this. Until then, exceeding the cap must produce a clear
-	// error (via panic — the operator pipeline lacks an error
-	// channel in Step 4).
+	// lift this. Until then, exceeding the cap must surface as a
+	// sticky error on Err() and Next() must stop early.
 	n := VectorSize + 100 // 1124 unique keys
 	keys := make([]int64, n)
 	for i := range n {
@@ -484,10 +483,176 @@ func TestGroupByOpTooManyGroupsPanics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic on > VectorSize groups, got none")
+	b, ok := op.Next()
+	if ok || b != nil {
+		t.Fatalf("expected (nil, false) on group-cap overflow, got (%v, %v)", b, ok)
+	}
+	if op.Err() == nil {
+		t.Error("expected sticky error on Err(), got nil")
+	}
+	// numGroups must not have ballooned past the cap — the check is
+	// inside the probe loop, not at batch end.
+	if op.numGroups > VectorSize {
+		t.Errorf("numGroups = %d exceeded cap %d (check fires too late)", op.numGroups, VectorSize)
+	}
+	if len(op.keysInt64) > VectorSize {
+		t.Errorf("keysInt64 len = %d exceeded cap %d", len(op.keysInt64), VectorSize)
+	}
+	// Reset must clear the sticky error and let a subsequent drain
+	// work again (over a smaller input).
+	op.Reset()
+	if op.Err() != nil {
+		t.Errorf("Err() after Reset = %v, want nil", op.Err())
+	}
+}
+
+func TestGroupByOpNullsClearedAcrossReset(t *testing.T) {
+	// Reviewer blocker #1: make sure the key output Vector's null
+	// bitmap does not leak null bits from a prior drain. We run a
+	// fixture whose keys contain nulls first (so iteration 1 stamps
+	// a null on the key Vector), Reset, then run a fixture with NO
+	// nulls. Every emitted key must report IsNull == false.
+	makeRG := func(withNulls bool) *storage.RowGroup {
+		n := 50
+		keys := make([]int64, n)
+		for i := range n {
+			keys[i] = int64(i % 3)
 		}
-	}()
-	_, _ = op.Next()
+		var nullBM *storage.NullBitmap
+		if withNulls {
+			nullBM = storage.NewNullBitmap(n)
+			nullBM.SetNull(0)
+			nullBM.SetNull(7)
+		} else {
+			nullBM = storage.NewNullBitmap(n)
+		}
+		kc, err := storage.NewColumnChunk("k", storage.NewInt64ColumnFromSlice(keys), nullBM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rg, err := storage.NewRowGroup(kc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rg
+	}
+
+	// Two independent scans: op cannot rebind child, so we rebuild.
+	// First drain: null keys present.
+	scan1, _ := NewScanOp(makeRG(true), []string{"k"})
+	op, err := NewGroupByOp(scan1, 0, storage.TypeInt64, []AggregateSpec{
+		{Name: "n", ColIndex: 0, Agg: &CountStar{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, ok := op.Next()
+	if !ok {
+		t.Fatal("first drain returned no batch")
+	}
+	sawNull := false
+	for _, i := range first.Sel.Indices() {
+		if first.Vectors[0].IsNull(int(i)) {
+			sawNull = true
+		}
+	}
+	if !sawNull {
+		t.Fatal("first drain did not produce a null group — test precondition failed")
+	}
+
+	// Swap child for a no-null row group. Currently the child isn't
+	// rebindable, so we just create a fresh op over the no-null rg;
+	// the important check is that the prior null flag doesn't leak
+	// forward through the out Vector when its .Reset() is called.
+	// We simulate it by reaching into op to rebind the child. This
+	// is a white-box test — operator reuse across different child
+	// streams isn't part of the public contract, but the null-bit
+	// clearing is what matters.
+	scan2, _ := NewScanOp(makeRG(false), []string{"k"})
+	op.child = scan2
+	op.Reset()
+	second, ok := op.Next()
+	if !ok {
+		t.Fatal("second drain returned no batch")
+	}
+	for _, i := range second.Sel.Indices() {
+		if second.Vectors[0].IsNull(int(i)) {
+			t.Errorf("row %d in second drain reports null, but no nulls were fed — null bitmap leaked across Reset", i)
+		}
+	}
+}
+
+func TestGroupByOpNullKeyMultiBatch(t *testing.T) {
+	// Reviewer suggestion #7: the null-key group may be assigned in
+	// a batch OTHER than the first, which exercises the "Grow for
+	// the null group mid-stream" code path. Fixture: 3000 rows,
+	// all keys non-null in the first VectorSize rows, nulls only
+	// appearing from row VectorSize onward.
+	const n = 3000
+	keys := make([]int64, n)
+	vals := make([]int64, n)
+	nullBM := storage.NewNullBitmap(n)
+	var naiveNullSum, naiveNullCount int64
+	naive := map[int64]int64{}
+	for i := range n {
+		keys[i] = int64(i % 5)
+		vals[i] = int64(i)
+		if i >= VectorSize && i%11 == 0 {
+			nullBM.SetNull(i)
+			naiveNullSum += vals[i]
+			naiveNullCount++
+			continue
+		}
+		naive[keys[i]] += vals[i]
+	}
+	kc, err := storage.NewColumnChunk("k", storage.NewInt64ColumnFromSlice(keys), nullBM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vc := storage.NewColumnChunkNoNulls("v", storage.NewInt64ColumnFromSlice(vals))
+	rg, err := storage.NewRowGroup(kc, vc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan, err := NewScanOp(rg, []string{"k", "v"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := NewGroupByOp(scan, 0, storage.TypeInt64, []AggregateSpec{
+		{Name: "sum_v", ColIndex: 1, Agg: &Int64Sum{}},
+		{Name: "n", ColIndex: 1, Agg: &CountStar{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := drainGroupBy(t, op)
+	if b.Len() != len(naive)+1 {
+		t.Fatalf("group count = %d, want %d", b.Len(), len(naive)+1)
+	}
+	keysOut := b.Vectors[0].Int64s()
+	sumsOut := b.Vectors[1].Int64s()
+	countsOut := b.Vectors[2].Int64s()
+	sawNull := false
+	for _, i := range b.Sel.Indices() {
+		if b.Vectors[0].IsNull(int(i)) {
+			sawNull = true
+			if sumsOut[i] != naiveNullSum {
+				t.Errorf("null group SUM(v) = %d, want %d", sumsOut[i], naiveNullSum)
+			}
+			if countsOut[i] != naiveNullCount {
+				t.Errorf("null group COUNT(*) = %d, want %d", countsOut[i], naiveNullCount)
+			}
+			continue
+		}
+		if want, ok := naive[keysOut[i]]; ok {
+			if sumsOut[i] != want {
+				t.Errorf("key %d: SUM(v) = %d, want %d", keysOut[i], sumsOut[i], want)
+			}
+		} else {
+			t.Errorf("unexpected key %d", keysOut[i])
+		}
+	}
+	if !sawNull {
+		t.Error("null group never emitted (assigned mid-stream — this is the path under test)")
+	}
 }
