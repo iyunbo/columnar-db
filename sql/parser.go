@@ -95,9 +95,6 @@ func (p *parser) parseSelectList() ([]SelectItem, error) {
 		}
 		p.advance() // consume ','
 	}
-	if len(items) == 0 {
-		return nil, p.errorf("expected select list after SELECT")
-	}
 	return items, nil
 }
 
@@ -109,7 +106,7 @@ func (p *parser) parseSelectItem() (SelectItem, error) {
 	tok := p.peek()
 
 	// Aggregate function call.
-	if isAggKeyword(tok.Kind) {
+	if tok.Kind.IsAggKeyword() {
 		funcName := tok.Value
 		p.advance()
 		if err := p.expect(TokLParen); err != nil {
@@ -151,13 +148,13 @@ func (p *parser) parsePredicate() (*Predicate, error) {
 	p.advance()
 
 	op := p.peek()
-	if !isComparator(op.Kind) {
+	if !op.Kind.IsComparator() {
 		return nil, p.errorf("expected comparator (=, !=, <, <=, >, >=) after column name, got %s", op.Kind)
 	}
 	p.advance()
 
 	lit := p.peek()
-	if !isLiteral(lit.Kind) {
+	if !lit.Kind.IsLiteral() {
 		return nil, p.errorf("expected literal value after comparator, got %s %q", lit.Kind, lit.Value)
 	}
 	p.advance()
@@ -165,17 +162,6 @@ func (p *parser) parsePredicate() (*Predicate, error) {
 	return &Predicate{Column: col.Value, Op: op.Kind, Literal: lit}, nil
 }
 
-func isComparator(k TokenKind) bool {
-	return k == TokEq || k == TokNe || k == TokLt || k == TokLe || k == TokGt || k == TokGe
-}
-
-func isLiteral(k TokenKind) bool {
-	return k == TokInt || k == TokFloat || k == TokString
-}
-
-func isAggKeyword(k TokenKind) bool {
-	return k == TokCount || k == TokSum || k == TokMin || k == TokMax || k == TokAvg
-}
 
 // ---------------------------------------------------------------
 // helpers
