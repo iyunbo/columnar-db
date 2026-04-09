@@ -111,7 +111,7 @@ func (p *parser) parseSelectItem() (SelectItem, error) {
 
 	// Aggregate function call.
 	if tok.Kind.IsAggKeyword() {
-		funcName := tok.Value
+		funcName := tok.Kind.String() // canonical uppercase ("COUNT", "SUM", ...)
 		p.advance()
 		if err := p.expect(TokLParen); err != nil {
 			return SelectItem{}, err
