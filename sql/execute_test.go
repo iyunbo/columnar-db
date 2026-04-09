@@ -463,6 +463,63 @@ func TestExecuteColumnNotInGroupByErrors(t *testing.T) {
 	}
 }
 
+func TestExecuteGroupByUnknownColumnErrors(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	_, err := Execute(rg, "SELECT COUNT(*) FROM t GROUP BY bogus")
+	if err == nil {
+		t.Fatal("unknown GROUP BY column should error")
+	}
+}
+
+func TestExecuteSelectStarWithAggErrors(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	_, err := Execute(rg, "SELECT *, COUNT(*) FROM t")
+	if err == nil {
+		t.Fatal("SELECT * mixed with aggregate should error")
+	}
+}
+
+func TestExecuteAvgThroughSQL(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT AVG(age) FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := op.Next()
+	// ages 25,30,35,40,45 → avg = 175/5 = 35.0
+	avg := b.Vectors[0].Float64s()[0]
+	if avg != 35.0 {
+		t.Errorf("AVG(age) = %v, want 35.0", avg)
+	}
+}
+
+func TestExecuteGroupByWhereColumnOutsideKeys(t *testing.T) {
+	// WHERE column (name) is not in GROUP BY or aggregate inputs.
+	// It should still work: planner adds name to scan for the
+	// filter, GroupByOp ignores it.
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT city, COUNT(*) FROM t WHERE name = 'Alice' GROUP BY city")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for {
+		b, ok := op.Next()
+		if !ok {
+			break
+		}
+		cities := b.Vectors[0].Strings()
+		counts := b.Vectors[1].Int64s()
+		for _, i := range b.Sel.Indices() {
+			got[cities[i]] = counts[i]
+		}
+	}
+	// Alice is in Paris with age 25 → only Paris group with count 1.
+	if got["Paris"] != 1 || len(got) != 1 {
+		t.Errorf("got %v, want {Paris: 1}", got)
+	}
+}
+
 func TestExecuteGroupByInterleavedSelectOrder(t *testing.T) {
 	// SELECT list: COUNT(*), city — different from GroupByOp output
 	// [city, COUNT(*)]. Planner must add ProjectOp to reorder.

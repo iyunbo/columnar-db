@@ -73,9 +73,16 @@ func planSimpleSelect(rg *storage.RowGroup, schema storage.Schema, stmt *SelectS
 func planAggregation(rg *storage.RowGroup, schema storage.Schema, stmt *SelectStmt) (exec.Operator, error) {
 	groupKeys := stmt.GroupBy
 
+	// Validate: SELECT * mixed with aggregates is rejected.
+	for _, item := range stmt.Items {
+		if item.Star {
+			return nil, fmt.Errorf("sql: planner: SELECT * cannot be mixed with aggregate functions")
+		}
+	}
+
 	// Validate: plain columns must be in GROUP BY.
 	for _, item := range stmt.Items {
-		if item.Column != "" && !item.Star {
+		if item.Column != "" {
 			if len(groupKeys) == 0 {
 				return nil, fmt.Errorf("sql: planner: column %q must appear in GROUP BY or be inside an aggregate function", item.Column)
 			}
@@ -237,6 +244,9 @@ func buildAggregator(schema storage.Schema, scanCols []string, item SelectItem) 
 
 	switch funcName {
 	case "COUNT":
+		// TODO: COUNT(col) should skip NULLs per SQL standard once
+		// nullable columns are queryable. Currently maps to CountStar
+		// which counts all rows — identical result when no nulls exist.
 		return &exec.CountStar{}, colIdx, nil
 	case "SUM":
 		switch colType {
