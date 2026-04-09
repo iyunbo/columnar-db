@@ -36,13 +36,13 @@ func makeIntegrationRG(t *testing.T) *storage.RowGroup {
 }
 
 // drain collects all rows from an operator into a slice of batches.
-func drain(t *testing.T, rg *storage.RowGroup, query string) []*Batch {
+func drain(t *testing.T, rg *storage.RowGroup, query string) []*exec.Batch {
 	t.Helper()
 	op, err := Execute(rg, query)
 	if err != nil {
 		t.Fatalf("Execute(%q): %v", query, err)
 	}
-	var batches []*Batch
+	var batches []*exec.Batch
 	for {
 		b, ok := op.Next()
 		if !ok {
@@ -52,12 +52,6 @@ func drain(t *testing.T, rg *storage.RowGroup, query string) []*Batch {
 	}
 	return batches
 }
-
-// Batch is a local alias so we can use it in this file's helpers
-// without importing exec (Execute returns exec.Operator, but the
-// batches it yields are *exec.Batch which we access through the
-// interface).
-type Batch = exec.Batch
 
 // drainCount returns the total row count across all batches.
 func drainCount(t *testing.T, rg *storage.RowGroup, query string) int {

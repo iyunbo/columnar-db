@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/iyunbo/columnar-db/exec"
 	"github.com/iyunbo/columnar-db/storage"
@@ -143,12 +142,20 @@ func planAggregation(rg *storage.RowGroup, schema storage.Schema, stmt *SelectSt
 	}
 
 	// Build aggregate specs. ColIndex = position in scanCols.
+	// Column type was already validated during scan-col collection
+	// above, so schemaLookup here is guaranteed to succeed.
 	specs := make([]exec.AggregateSpec, 0, len(stmt.Items))
 	for _, item := range stmt.Items {
 		if item.AggFunc == "" {
 			continue
 		}
-		agg, colIdx, err := buildAggregator(schema, scanCols, item)
+		var colType storage.ColumnType
+		colIdx := 0
+		if item.AggArg != "*" {
+			colType, _ = schemaLookup(schema, item.AggArg)
+			colIdx = slices.Index(scanCols, item.AggArg)
+		}
+		agg, err := buildAggregator(item.AggFunc, colType, item.AggArg)
 		if err != nil {
 			return nil, err
 		}
@@ -228,64 +235,59 @@ func buildOutputProjection(items []SelectItem, groupKeys []string) []int {
 }
 
 // buildAggregator creates the right exec.Aggregator for the given
-// aggregate function and input column type.
-func buildAggregator(schema storage.Schema, scanCols []string, item SelectItem) (exec.Aggregator, int, error) {
-	funcName := strings.ToUpper(item.AggFunc)
-
-	if funcName == "COUNT" && item.AggArg == "*" {
-		return &exec.CountStar{}, 0, nil
+// aggregate function name (canonical uppercase from parser, e.g.
+// "COUNT") and the pre-resolved column type. The caller has already
+// validated the column exists and looked up its type — no redundant
+// schemaLookup here.
+func buildAggregator(funcName string, colType storage.ColumnType, colArg string) (exec.Aggregator, error) {
+	if funcName == "COUNT" && colArg == "*" {
+		return &exec.CountStar{}, nil
 	}
-
-	colType, ok := schemaLookup(schema, item.AggArg)
-	if !ok {
-		return nil, 0, fmt.Errorf("sql: planner: aggregate %s references unknown column %q", funcName, item.AggArg)
-	}
-	colIdx := slices.Index(scanCols, item.AggArg)
 
 	switch funcName {
 	case "COUNT":
 		// TODO: COUNT(col) should skip NULLs per SQL standard once
 		// nullable columns are queryable. Currently maps to CountStar
 		// which counts all rows — identical result when no nulls exist.
-		return &exec.CountStar{}, colIdx, nil
+		return &exec.CountStar{}, nil
 	case "SUM":
 		switch colType {
 		case storage.TypeInt64:
-			return &exec.Int64Sum{}, colIdx, nil
+			return &exec.Int64Sum{}, nil
 		case storage.TypeFloat64:
-			return &exec.Float64Sum{}, colIdx, nil
+			return &exec.Float64Sum{}, nil
 		default:
-			return nil, 0, fmt.Errorf("sql: planner: SUM not supported on %s column %q", colType, item.AggArg)
+			return nil, fmt.Errorf("sql: planner: SUM not supported on %s column %q", colType, colArg)
 		}
 	case "MIN":
 		switch colType {
 		case storage.TypeInt64:
-			return &exec.Int64Min{}, colIdx, nil
+			return &exec.Int64Min{}, nil
 		case storage.TypeFloat64:
-			return &exec.Float64Min{}, colIdx, nil
+			return &exec.Float64Min{}, nil
 		default:
-			return nil, 0, fmt.Errorf("sql: planner: MIN not supported on %s column %q", colType, item.AggArg)
+			return nil, fmt.Errorf("sql: planner: MIN not supported on %s column %q", colType, colArg)
 		}
 	case "MAX":
 		switch colType {
 		case storage.TypeInt64:
-			return &exec.Int64Max{}, colIdx, nil
+			return &exec.Int64Max{}, nil
 		case storage.TypeFloat64:
-			return &exec.Float64Max{}, colIdx, nil
+			return &exec.Float64Max{}, nil
 		default:
-			return nil, 0, fmt.Errorf("sql: planner: MAX not supported on %s column %q", colType, item.AggArg)
+			return nil, fmt.Errorf("sql: planner: MAX not supported on %s column %q", colType, colArg)
 		}
 	case "AVG":
 		switch colType {
 		case storage.TypeInt64:
-			return &exec.Int64Avg{}, colIdx, nil
+			return &exec.Int64Avg{}, nil
 		case storage.TypeFloat64:
-			return &exec.Float64Avg{}, colIdx, nil
+			return &exec.Float64Avg{}, nil
 		default:
-			return nil, 0, fmt.Errorf("sql: planner: AVG not supported on %s column %q", colType, item.AggArg)
+			return nil, fmt.Errorf("sql: planner: AVG not supported on %s column %q", colType, colArg)
 		}
 	}
-	return nil, 0, fmt.Errorf("sql: planner: unknown aggregate function %q", funcName)
+	return nil, fmt.Errorf("sql: planner: unknown aggregate function %q", funcName)
 }
 
 // ---------------------------------------------------------------
