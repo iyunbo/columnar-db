@@ -265,6 +265,25 @@ func TestTokenizeTrailingWhitespace(t *testing.T) {
 	assertKinds(t, toks, TokSelect, TokEOF)
 }
 
+func TestTokenizeMinusAndPlus(t *testing.T) {
+	toks, err := Tokenize("age > -30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertKinds(t, toks, TokIdent, TokGt, TokMinus, TokInt, TokEOF)
+}
+
+func TestTokenizeStringWithNewline(t *testing.T) {
+	toks, err := Tokenize("'hello\nworld'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertKinds(t, toks, TokString, TokEOF)
+	if toks[0].Value != "hello\nworld" {
+		t.Errorf("string value = %q, want %q", toks[0].Value, "hello\nworld")
+	}
+}
+
 func TestTokenizeAsKeyword(t *testing.T) {
 	toks, err := Tokenize("age AS a")
 	if err != nil {

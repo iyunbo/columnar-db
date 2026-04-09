@@ -1,24 +1,68 @@
 package sql
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
-// keywords maps upper-cased identifiers to their keyword TokenKind.
-// Looked up once per identifier token; miss → TokIdent.
-var keywords = map[string]TokenKind{
-	"SELECT": TokSelect,
-	"FROM":   TokFrom,
-	"WHERE":  TokWhere,
-	"GROUP":  TokGroup,
-	"BY":     TokBy,
-	"AS":     TokAs,
-	"COUNT":  TokCount,
-	"SUM":    TokSum,
-	"MIN":    TokMin,
-	"MAX":    TokMax,
-	"AVG":    TokAvg,
+// lookupKeyword does an alloc-free case-insensitive check of val
+// against the known keywords. Uses byte-level ASCII lowering
+// (val[i] | 0x20) so strings.ToUpper is never called and no
+// temporary string is allocated. Returns TokIdent on miss.
+func lookupKeyword(val string) TokenKind {
+	switch len(val) {
+	case 2:
+		if asciiEqFold(val, "as") {
+			return TokAs
+		}
+		if asciiEqFold(val, "by") {
+			return TokBy
+		}
+	case 3:
+		if asciiEqFold(val, "avg") {
+			return TokAvg
+		}
+		if asciiEqFold(val, "max") {
+			return TokMax
+		}
+		if asciiEqFold(val, "min") {
+			return TokMin
+		}
+		if asciiEqFold(val, "sum") {
+			return TokSum
+		}
+	case 4:
+		if asciiEqFold(val, "from") {
+			return TokFrom
+		}
+	case 5:
+		if asciiEqFold(val, "count") {
+			return TokCount
+		}
+		if asciiEqFold(val, "group") {
+			return TokGroup
+		}
+		if asciiEqFold(val, "where") {
+			return TokWhere
+		}
+	case 6:
+		if asciiEqFold(val, "select") {
+			return TokSelect
+		}
+	}
+	return TokIdent
+}
+
+// asciiEqFold returns true if a and lower are equal under ASCII
+// case folding. lower MUST be all-lowercase. Only valid for ASCII
+// letters — which is all SQL keywords are.
+func asciiEqFold(a, lower string) bool {
+	if len(a) != len(lower) {
+		return false
+	}
+	for i := range len(a) {
+		if a[i]|0x20 != lower[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Tokenize consumes the entire input and returns either a complete
@@ -52,11 +96,7 @@ func Tokenize(input string) ([]Token, error) {
 				pos++
 			}
 			val := input[start:pos]
-			kind := TokIdent
-			if kw, ok := keywords[strings.ToUpper(val)]; ok {
-				kind = kw
-			}
-			tokens = append(tokens, Token{Kind: kind, Value: val, Pos: start})
+			tokens = append(tokens, Token{Kind: lookupKeyword(val), Value: val, Pos: start})
 
 		// Numeric literals (int or float).
 		case isDigit(ch):
@@ -113,6 +153,12 @@ func Tokenize(input string) ([]Token, error) {
 			pos++
 		case ch == '*':
 			tokens = append(tokens, Token{Kind: TokStar, Value: input[start : start+1], Pos: start})
+			pos++
+		case ch == '-':
+			tokens = append(tokens, Token{Kind: TokMinus, Value: input[start : start+1], Pos: start})
+			pos++
+		case ch == '+':
+			tokens = append(tokens, Token{Kind: TokPlus, Value: input[start : start+1], Pos: start})
 			pos++
 		case ch == ',':
 			tokens = append(tokens, Token{Kind: TokComma, Value: input[start : start+1], Pos: start})
