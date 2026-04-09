@@ -2,6 +2,7 @@ package sql
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/iyunbo/columnar-db/exec"
 	"github.com/iyunbo/columnar-db/storage"
@@ -10,18 +11,33 @@ import (
 // Plan translates a parsed SelectStmt into an exec.Operator tree
 // that can be drained via Next()/Reset(). The RowGroup's schema is
 // used to validate column names and resolve column indexes.
-//
-// Phase 5 Step 3 scope: SELECT { * | col_list } FROM t →
-// ScanOp (with only the requested columns projected). WHERE and
-// GROUP BY are stubs returning errors; Steps 4 and 5 fill them in.
 func Plan(rg *storage.RowGroup, stmt *SelectStmt) (exec.Operator, error) {
 	schema := rg.Schema()
 
-	// Validate that the select list only uses columns that exist.
 	// Collect the column names the ScanOp needs to read.
 	scanCols, err := resolveScanColumns(schema, stmt)
 	if err != nil {
 		return nil, err
+	}
+
+	// If WHERE references a column not in the select list, the scan
+	// must include it so FilterOp can read it. We track whether we
+	// added an extra column so we can drop it via ProjectOp after
+	// filtering.
+	extraWhereCol := false
+	whereColIdx := -1
+	if stmt.Where != nil {
+		if !schemaHasColumn(schema, stmt.Where.Column) {
+			return nil, fmt.Errorf("sql: planner: WHERE references unknown column %q", stmt.Where.Column)
+		}
+		idx := indexOf(scanCols, stmt.Where.Column)
+		if idx < 0 {
+			scanCols = append(scanCols, stmt.Where.Column)
+			whereColIdx = len(scanCols) - 1
+			extraWhereCol = true
+		} else {
+			whereColIdx = idx
+		}
 	}
 
 	scan, err := exec.NewScanOp(rg, scanCols)
@@ -29,13 +45,78 @@ func Plan(rg *storage.RowGroup, stmt *SelectStmt) (exec.Operator, error) {
 		return nil, fmt.Errorf("sql: planner: %w", err)
 	}
 
-	// For Step 3, no WHERE and no GROUP BY — just return ScanOp
-	// directly. The select-list order is already the scan order
-	// because resolveScanColumns returns columns in select-list
-	// order. No ProjectOp needed unless Step 5 adds aggregates
-	// that reorder the output.
+	var op exec.Operator = scan
 
-	return scan, nil
+	// WHERE → FilterOp.
+	if stmt.Where != nil {
+		colType := schemaColumnType(schema, stmt.Where.Column)
+		pred, err := buildPredicate(colType, stmt.Where)
+		if err != nil {
+			return nil, err
+		}
+		filter, err := exec.NewFilterOp(op, whereColIdx, pred)
+		if err != nil {
+			return nil, fmt.Errorf("sql: planner: %w", err)
+		}
+		op = filter
+	}
+
+	// If we added an extra column for WHERE, drop it via ProjectOp
+	// so the output matches the original select list.
+	if extraWhereCol {
+		projCols := make([]int, len(scanCols)-1)
+		for i := range projCols {
+			projCols[i] = i
+		}
+		proj, err := exec.NewProjectOp(op, projCols)
+		if err != nil {
+			return nil, fmt.Errorf("sql: planner: %w", err)
+		}
+		op = proj
+	}
+
+	return op, nil
+}
+
+// buildPredicate creates an exec.Predicate from the parsed WHERE
+// clause. Coercion rules (from docs/phase5-steps.md):
+//
+//   - Int literal + Int64 column → Int64 predicate
+//   - String literal + String column → StringEq (= only)
+//   - Other combinations → planner error
+func buildPredicate(colType storage.ColumnType, w *Predicate) (exec.Predicate, error) {
+	switch colType {
+	case storage.TypeInt64:
+		v, err := strconv.ParseInt(w.Literal.Value, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("sql: planner: cannot parse %q as int64 for column %q: %w", w.Literal.Value, w.Column, err)
+		}
+		switch w.Op {
+		case TokEq:
+			return exec.Int64Eq{Value: v}, nil
+		case TokNe:
+			return exec.Int64Ne{Value: v}, nil
+		case TokLt:
+			return exec.Int64Lt{Value: v}, nil
+		case TokLe:
+			return exec.Int64Le{Value: v}, nil
+		case TokGt:
+			return exec.Int64Gt{Value: v}, nil
+		case TokGe:
+			return exec.Int64Ge{Value: v}, nil
+		}
+	case storage.TypeString:
+		if w.Literal.Kind != TokString {
+			return nil, fmt.Errorf("sql: planner: WHERE on string column %q requires a string literal, got %s", w.Column, w.Literal.Kind)
+		}
+		if w.Op != TokEq {
+			return nil, fmt.Errorf("sql: planner: string column %q only supports = comparison (no %s)", w.Column, w.Op)
+		}
+		return exec.StringEq{Value: w.Literal.Value}, nil
+	case storage.TypeFloat64:
+		return nil, fmt.Errorf("sql: planner: WHERE on float64 column %q not supported yet (no Float64 predicates)", w.Column)
+	}
+	return nil, fmt.Errorf("sql: planner: unsupported column type %s for WHERE", colType)
 }
 
 // resolveScanColumns maps the select list to the RowGroup's schema,
@@ -70,4 +151,22 @@ func schemaHasColumn(schema storage.Schema, name string) bool {
 		}
 	}
 	return false
+}
+
+func schemaColumnType(schema storage.Schema, name string) storage.ColumnType {
+	for i, n := range schema.Names {
+		if n == name {
+			return schema.Types[i]
+		}
+	}
+	return 0 // unreachable if caller already validated
+}
+
+func indexOf(ss []string, s string) int {
+	for i, v := range ss {
+		if v == s {
+			return i
+		}
+	}
+	return -1
 }

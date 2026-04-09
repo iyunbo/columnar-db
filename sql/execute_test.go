@@ -159,6 +159,148 @@ func TestExecuteDuplicateColumns(t *testing.T) {
 	}
 }
 
+func TestExecuteWhereInt64Gt(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT name, age FROM people WHERE age > 30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, ok := op.Next()
+	if !ok {
+		t.Fatal("no batch")
+	}
+	// Fixture: ages 25,30,35,40,45. Only 35,40,45 survive.
+	if b.Len() != 3 {
+		t.Fatalf("rows = %d, want 3", b.Len())
+	}
+	names := b.Vectors[0].Strings()
+	ages := b.Vectors[1].Int64s()
+	for _, i := range b.Sel.Indices() {
+		if ages[i] <= 30 {
+			t.Errorf("row %d: age=%d should not survive WHERE age > 30", i, ages[i])
+		}
+		_ = names[i] // ensure projection includes name
+	}
+}
+
+func TestExecuteWhereStringEq(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT name FROM people WHERE city = 'Paris'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, ok := op.Next()
+	if !ok {
+		t.Fatal("no batch")
+	}
+	// Fixture: cities Paris,Lyon,Paris,Lyon,Paris → 3 Paris rows.
+	if b.Len() != 3 {
+		t.Fatalf("rows = %d, want 3", b.Len())
+	}
+	// Output should be 1 column (name only) — city was added for
+	// the filter and then dropped via ProjectOp.
+	if b.NumColumns() != 1 {
+		t.Fatalf("columns = %d, want 1 (city should be projected out)", b.NumColumns())
+	}
+}
+
+func TestExecuteWhereColumnInSelectList(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	// age is in both SELECT and WHERE — no extra column, no ProjectOp.
+	op, err := Execute(rg, "SELECT age FROM t WHERE age >= 40")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, ok := op.Next()
+	if !ok {
+		t.Fatal("no batch")
+	}
+	if b.Len() != 2 { // 40, 45
+		t.Fatalf("rows = %d, want 2", b.Len())
+	}
+	if b.NumColumns() != 1 {
+		t.Fatalf("columns = %d, want 1", b.NumColumns())
+	}
+}
+
+func TestExecuteWhereSelectStar(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT * FROM t WHERE age < 30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, ok := op.Next()
+	if !ok {
+		t.Fatal("no batch")
+	}
+	// Only age=25 survives.
+	if b.Len() != 1 {
+		t.Fatalf("rows = %d, want 1", b.Len())
+	}
+	if b.NumColumns() != 3 {
+		t.Fatalf("columns = %d, want 3", b.NumColumns())
+	}
+}
+
+func TestExecuteWhereUnknownColumn(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	_, err := Execute(rg, "SELECT age FROM t WHERE bogus > 10")
+	if err == nil {
+		t.Fatal("unknown WHERE column should error")
+	}
+}
+
+func TestExecuteWhereTypeMismatch(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	// city is string, but comparing with int literal.
+	_, err := Execute(rg, "SELECT name FROM t WHERE city > 5")
+	if err == nil {
+		t.Fatal("string column with int literal should error")
+	}
+}
+
+func TestExecuteWhereStringNonEqErrors(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	_, err := Execute(rg, "SELECT name FROM t WHERE city > 'Paris'")
+	if err == nil {
+		t.Fatal("string > comparison should error (only = supported)")
+	}
+}
+
+func TestExecuteWhereAllOps(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	// ages: 25, 30, 35, 40, 45
+	tests := []struct {
+		sql  string
+		want int
+	}{
+		{"SELECT age FROM t WHERE age = 30", 1},
+		{"SELECT age FROM t WHERE age != 30", 4},
+		{"SELECT age FROM t WHERE age < 35", 2},
+		{"SELECT age FROM t WHERE age <= 35", 3},
+		{"SELECT age FROM t WHERE age > 35", 2},
+		{"SELECT age FROM t WHERE age >= 35", 3},
+	}
+	for _, tc := range tests {
+		op, err := Execute(rg, tc.sql)
+		if err != nil {
+			t.Errorf("%s: %v", tc.sql, err)
+			continue
+		}
+		total := 0
+		for {
+			b, ok := op.Next()
+			if !ok {
+				break
+			}
+			total += b.Len()
+		}
+		if total != tc.want {
+			t.Errorf("%s: got %d rows, want %d", tc.sql, total, tc.want)
+		}
+	}
+}
+
 func TestExecuteLexerError(t *testing.T) {
 	rg := makeTestRowGroup(t)
 	_, err := Execute(rg, "SELECT @")
