@@ -25,8 +25,13 @@ func Execute(rg *storage.RowGroup, query string) (exec.Operator, error) {
 	if query == "" {
 		return nil, fmt.Errorf("sql: Execute requires a non-empty query")
 	}
-	if _, err := Tokenize(query); err != nil {
+	tokens, err := Tokenize(query)
+	if err != nil {
 		return nil, err
 	}
-	return nil, fmt.Errorf("sql: Execute not implemented")
+	stmt, err := Parse(tokens)
+	if err != nil {
+		return nil, err
+	}
+	return Plan(rg, stmt)
 }
