@@ -104,6 +104,8 @@ func buildPredicate(colType storage.ColumnType, w *Predicate) (exec.Predicate, e
 			return exec.Int64Gt{Value: v}, nil
 		case TokGe:
 			return exec.Int64Ge{Value: v}, nil
+		default:
+			return nil, fmt.Errorf("sql: planner: unsupported operator %s for int64 column %q", w.Op, w.Column)
 		}
 	case storage.TypeString:
 		if w.Literal.Kind != TokString {

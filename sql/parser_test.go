@@ -89,7 +89,7 @@ func TestParseMissingTableName(t *testing.T) {
 func TestParseExtraTokensAfterStatement(t *testing.T) {
 	_, err := Parse(mustTokenize(t, "SELECT age FROM t WHERE"))
 	if err == nil {
-		t.Fatal("WHERE should error in Step 3 (not implemented)")
+		t.Fatal("incomplete WHERE should error")
 	}
 }
 
