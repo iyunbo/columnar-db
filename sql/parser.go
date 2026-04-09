@@ -1,6 +1,9 @@
 package sql
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // parser is a hand-rolled recursive-descent parser that consumes
 // a []Token (from Tokenize) and produces a *SelectStmt. It is
@@ -72,6 +75,31 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 			return nil, err
 		}
 		stmt.GroupBy = cols
+	}
+
+	// ORDER BY col [ASC|DESC].
+	if p.peek().Kind == TokOrder {
+		ob, err := p.parseOrderBy()
+		if err != nil {
+			return nil, err
+		}
+		stmt.OrderBy = ob
+	}
+
+	// LIMIT n.
+	stmt.Limit = -1
+	if p.peek().Kind == TokLimit {
+		p.advance()
+		tok := p.peek()
+		if tok.Kind != TokInt {
+			return nil, p.errorf("expected integer after LIMIT, got %s", tok.Kind)
+		}
+		p.advance()
+		n, err := strconv.Atoi(tok.Value)
+		if err != nil || n < 0 {
+			return nil, p.errorf("LIMIT must be a non-negative integer, got %q", tok.Value)
+		}
+		stmt.Limit = n
 	}
 
 	return stmt, nil
@@ -166,6 +194,27 @@ func (p *parser) parsePredicate() (*Predicate, error) {
 	return &Predicate{Column: col.Value, Op: op.Kind, Literal: lit}, nil
 }
 
+
+// parseOrderBy handles: ORDER BY col [ASC|DESC]
+func (p *parser) parseOrderBy() (*OrderByClause, error) {
+	p.advance() // consume ORDER
+	if err := p.expect(TokBy); err != nil {
+		return nil, err
+	}
+	col := p.peek()
+	if col.Kind != TokIdent {
+		return nil, p.errorf("expected column name after ORDER BY, got %s", col.Kind)
+	}
+	p.advance()
+	ascending := true
+	if p.peek().Kind == TokAsc {
+		p.advance()
+	} else if p.peek().Kind == TokDesc {
+		ascending = false
+		p.advance()
+	}
+	return &OrderByClause{Column: col.Value, Ascending: ascending}, nil
+}
 
 // parseGroupBy handles: GROUP BY col [, col]*
 func (p *parser) parseGroupBy() ([]string, error) {

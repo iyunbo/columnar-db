@@ -24,10 +24,17 @@ func Plan(rg *storage.RowGroup, stmt *SelectStmt) (exec.Operator, error) {
 		}
 	}
 
+	var op exec.Operator
+	var err error
 	if hasAgg {
-		return planAggregation(rg, schema, stmt)
+		op, err = planAggregation(rg, schema, stmt)
+	} else {
+		op, err = planSimpleSelect(rg, schema, stmt)
 	}
-	return planSimpleSelect(rg, schema, stmt)
+	if err != nil {
+		return nil, err
+	}
+	return applyOrderByAndLimit(op, schema, stmt)
 }
 
 // planSimpleSelect handles SELECT (with optional WHERE, no aggregation).
@@ -288,6 +295,34 @@ func buildAggregator(funcName string, colType storage.ColumnType, colArg string)
 		}
 	}
 	return nil, fmt.Errorf("sql: planner: unknown aggregate function %q", funcName)
+}
+
+// applyOrderByAndLimit wraps op with OrderByOp and/or LimitOp
+// based on the statement's ORDER BY and LIMIT clauses. The ORDER
+// BY column is resolved against the SELECT list (output columns).
+func applyOrderByAndLimit(op exec.Operator, schema storage.Schema, stmt *SelectStmt) (exec.Operator, error) {
+	if stmt.OrderBy != nil {
+		sortColIdx := resolveOutputColumnIndex(stmt, stmt.OrderBy.Column)
+		if sortColIdx < 0 {
+			return nil, fmt.Errorf("sql: planner: ORDER BY column %q is not in the SELECT list", stmt.OrderBy.Column)
+		}
+		op = exec.NewOrderByOp(op, sortColIdx, stmt.OrderBy.Ascending)
+	}
+	if stmt.Limit >= 0 {
+		op = exec.NewLimitOp(op, stmt.Limit)
+	}
+	return op, nil
+}
+
+// resolveOutputColumnIndex finds a column name's position in the
+// SELECT list output. Returns -1 if not found.
+func resolveOutputColumnIndex(stmt *SelectStmt, name string) int {
+	for i, item := range stmt.Items {
+		if item.Column == name {
+			return i
+		}
+	}
+	return -1
 }
 
 // ---------------------------------------------------------------
