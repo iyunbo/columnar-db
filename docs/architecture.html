@@ -136,10 +136,11 @@
     <span><span class="swatch" style="background:var(--storage)"></span>storage (in-memory columnar types)</span>
     <span><span class="swatch" style="background:var(--encoding)"></span>encoding (compression &amp; encodings)</span>
     <span><span class="swatch" style="background:var(--disk)"></span>persistence (file I/O)</span>
+    <span><span class="swatch" style="background:#d2a8ff"></span>sql (SQL frontend + REPL)</span>
     <span><span class="swatch" style="background:var(--iface);opacity:0.7"></span>interface / abstract type</span>
   </div>
 
-<svg viewBox="0 0 1200 1050" xmlns="http://www.w3.org/2000/svg" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="13">
+<svg viewBox="0 -120 1200 1170" xmlns="http://www.w3.org/2000/svg" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="13">
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
@@ -157,13 +158,60 @@
   </defs>
 
   <!-- ============================== -->
+  <!-- LAYER 0: SQL FRONTEND + REPL   -->
+  <!-- ============================== -->
+  <rect x="20" y="-110" width="1160" height="110" rx="10"
+        fill="#141024" stroke="#d2a8ff" stroke-opacity="0.35"/>
+  <text x="38" y="-82" fill="#d2a8ff" font-weight="700" font-size="14">sql/ — SQL FRONTEND + cmd/columnar-db REPL</text>
+  <text x="38" y="-64" fill="#8b949e" font-size="12">Tokenize → Parse → Plan → Execute(rg, query) → exec.Operator</text>
+
+  <!-- Lexer -->
+  <g>
+    <rect x="60" y="-52" width="130" height="40" rx="6" fill="#1c142a" stroke="#d2a8ff"/>
+    <text x="125" y="-26" text-anchor="middle" fill="#d2a8ff" font-weight="700">Tokenize</text>
+  </g>
+
+  <!-- Parser -->
+  <g>
+    <rect x="210" y="-52" width="110" height="40" rx="6" fill="#1c142a" stroke="#d2a8ff"/>
+    <text x="265" y="-26" text-anchor="middle" fill="#d2a8ff" font-weight="700">Parse</text>
+  </g>
+
+  <!-- Planner -->
+  <g>
+    <rect x="340" y="-52" width="110" height="40" rx="6" fill="#1c142a" stroke="#d2a8ff"/>
+    <text x="395" y="-26" text-anchor="middle" fill="#d2a8ff" font-weight="700">Plan</text>
+  </g>
+
+  <!-- Execute -->
+  <g>
+    <rect x="470" y="-52" width="120" height="40" rx="6" fill="#1c142a" stroke="#d2a8ff"/>
+    <text x="530" y="-26" text-anchor="middle" fill="#d2a8ff" font-weight="700">Execute</text>
+  </g>
+
+  <!-- REPL -->
+  <g>
+    <rect x="750" y="-52" width="390" height="40" rx="6" fill="#1c142a" stroke="#d2a8ff"/>
+    <text x="945" y="-26" text-anchor="middle" fill="#d2a8ff" font-weight="700">cmd/columnar-db — Interactive REPL</text>
+  </g>
+
+  <!-- sql/ flow arrows -->
+  <line x1="190" y1="-32" x2="210" y2="-32" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="320" y1="-32" x2="340" y2="-32" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="450" y1="-32" x2="470" y2="-32" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- sql → exec (Plan produces Operator tree) -->
+  <path d="M 395 -12 Q 395 5 200 20" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
+  <text x="340" y="12" fill="#58a6ff" font-size="12">produces exec.Operator tree</text>
+
+  <!-- ============================== -->
   <!-- LAYER 1: EXECUTION             -->
   <!-- ============================== -->
   <rect x="20" y="20" width="1160" height="380" rx="10"
         fill="#0f1b12" stroke="#7ee787" stroke-opacity="0.35"/>
   <text x="38" y="48" fill="#7ee787" font-weight="700" font-size="14">exec/ — VECTORIZED EXECUTION ENGINE</text>
   <text x="38" y="66" fill="#8b949e" font-size="12">process ~1024 values per batch in tight typed loops; zero allocs in hot path</text>
-  <text x="38" y="82" fill="#8b949e" font-size="11" font-style="italic">canonical pipeline: ScanOp → FilterOp → ProjectOp → (AggregateOp | GroupByOp) → consumer</text>
+  <text x="38" y="82" fill="#8b949e" font-size="11" font-style="italic">pipeline: ScanOp → FilterOp → [ProjectOp] → [AggregateOp | GroupByOp] → [OrderByOp] → [LimitOp] → consumer</text>
 
   <!-- ScanOp -->
   <g>
@@ -480,8 +528,28 @@
         <td><code>exec/project.go</code></td>
       </tr>
       <tr>
+        <td class="pkg-exec"><code>AggregateOp</code></td>
+        <td>Scalar aggregation (no GROUP BY). Drains child → 1-row result. Uses <code>Aggregator</code> interface (Count/Sum/Min/Max/Avg × int64/float64).</td>
+        <td><code>exec/aggregate.go</code></td>
+      </tr>
+      <tr>
+        <td class="pkg-exec"><code>GroupByOp</code></td>
+        <td>Hash GROUP BY: single-key fast path (<code>map[int64/string]</code>) or multi-key composite path. Cursor-based multi-batch emission, unbounded groups.</td>
+        <td><code>exec/groupby.go</code></td>
+      </tr>
+      <tr>
+        <td class="pkg-exec"><code>OrderByOp</code></td>
+        <td>Blocking sort: drains child, collects rows column-wise, sorts via stable permutation, emits in VectorSize batches. Single column, ASC/DESC.</td>
+        <td><code>exec/orderby.go</code></td>
+      </tr>
+      <tr>
+        <td class="pkg-exec"><code>LimitOp</code></td>
+        <td>Pass-through that caps output rows by narrowing the final batch's <code>Selection</code>.</td>
+        <td><code>exec/limit.go</code></td>
+      </tr>
+      <tr>
         <td class="pkg-exec"><code>Predicate</code> (interface)</td>
-        <td><code>Eval(vec, in, out *Selection)</code>. Int64: <code>Eq / Ne / Lt / Le / Gt / Ge</code>. Nulls never match (three-valued logic).</td>
+        <td><code>Eval(vec, in, out *Selection)</code>. Int64: <code>Eq / Ne / Lt / Le / Gt / Ge</code>. String: <code>Eq</code>. Nulls never match.</td>
         <td><code>exec/predicate.go</code></td>
       </tr>
       <tr>
@@ -534,6 +602,16 @@
         <td>Block compression on top of the column encoding — operates on encoded bytes.</td>
         <td><code>encoding/lz4.go</code></td>
       </tr>
+      <tr>
+        <td style="color:#d2a8ff"><code>Tokenize / Parse / Plan</code></td>
+        <td>SQL frontend: zero-alloc-per-token lexer → recursive-descent parser → rule-based planner producing exec.Operator trees.</td>
+        <td><code>sql/</code></td>
+      </tr>
+      <tr>
+        <td style="color:#d2a8ff"><code>Execute</code></td>
+        <td>Entry point: <code>Execute(rg, query) → (exec.Operator, error)</code>. One RowGroup = one table. Streaming result via <code>Next()/Reset()</code>.</td>
+        <td><code>sql/sql.go</code></td>
+      </tr>
     </tbody>
   </table>
 
@@ -544,9 +622,9 @@
     <br><br>
     <strong>Read</strong> &nbsp; <code>SingleFileReader</code>.Open reads footer <span class="arrow">→</span> <code>ReadRowGroup(i)</code> decompresses + decodes <span class="arrow">→</span> in-memory <code>RowGroup</code>.
     <br><br>
-    <strong>Execute</strong> &nbsp; <code>ScanOp</code> (reused Batch, full <code>Sel</code>) <span class="arrow">→</span> <code>FilterOp</code> (swaps <code>Sel</code> with narrowed scratch) <span class="arrow">→</span> <code>ProjectOp</code> (rebinds Vectors subset, shares <code>Sel</code>) <span class="arrow">→</span> consumer iterates <code>b.Sel.Indices()</code>.
+    <strong>SQL</strong> &nbsp; <code>Tokenize</code> (zero-alloc per token) <span class="arrow">→</span> <code>Parse</code> (recursive descent → AST) <span class="arrow">→</span> <code>Plan</code> (AST → exec.Operator tree) <span class="arrow">→</span> consumer drains via <code>Next()</code>.
     <br><br>
-    <em>Coming in Phase 3 Step 6:</em> end-to-end pipeline benchmark (<code>Scan → Filter → Project</code>, zero alloc, ≥5× vs row-at-a-time).
+    <strong>Execute</strong> &nbsp; <code>ScanOp</code> (reused Batch, full <code>Sel</code>) <span class="arrow">→</span> <code>FilterOp</code> (swaps <code>Sel</code>) <span class="arrow">→</span> <code>GroupByOp</code> / <code>AggregateOp</code> <span class="arrow">→</span> <code>OrderByOp</code> (sort) <span class="arrow">→</span> <code>LimitOp</code> (cap) <span class="arrow">→</span> consumer iterates <code>b.Sel.Indices()</code>.
   </div>
 
   <h2>Invariants</h2>
