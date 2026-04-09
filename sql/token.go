@@ -54,6 +54,10 @@ const (
 	TokMin
 	TokMax
 	TokAvg
+	TokOrder
+	TokAsc
+	TokDesc
+	TokLimit
 
 	// Operators
 	TokStar  // *
@@ -112,6 +116,14 @@ func (k TokenKind) String() string {
 		return "MAX"
 	case TokAvg:
 		return "AVG"
+	case TokOrder:
+		return "ORDER"
+	case TokAsc:
+		return "ASC"
+	case TokDesc:
+		return "DESC"
+	case TokLimit:
+		return "LIMIT"
 	case TokStar:
 		return "*"
 	case TokMinus:

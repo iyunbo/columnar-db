@@ -32,8 +32,21 @@ type SelectStmt struct {
 	Where *Predicate
 
 	// GroupBy lists the column names after GROUP BY (nil if absent).
-	// Step 5 fills this in; until then the parser rejects GROUP BY.
 	GroupBy []string
+
+	// OrderBy is the column to sort by (nil if absent). Phase 5.5
+	// scope: single column only.
+	OrderBy *OrderByClause
+
+	// Limit is -1 when no LIMIT clause is present, otherwise the
+	// row cap.
+	Limit int
+}
+
+// OrderByClause represents ORDER BY col [ASC|DESC].
+type OrderByClause struct {
+	Column    string
+	Ascending bool // true for ASC (default), false for DESC
 }
 
 // SelectItem is one entry in the select list. Exactly one of Star,

@@ -16,6 +16,9 @@ func lookupKeyword(val string) TokenKind {
 			return TokBy
 		}
 	case 3:
+		if asciiEqFold(val, "asc") {
+			return TokAsc
+		}
 		if asciiEqFold(val, "avg") {
 			return TokAvg
 		}
@@ -29,6 +32,9 @@ func lookupKeyword(val string) TokenKind {
 			return TokSum
 		}
 	case 4:
+		if asciiEqFold(val, "desc") {
+			return TokDesc
+		}
 		if asciiEqFold(val, "from") {
 			return TokFrom
 		}
@@ -38,6 +44,12 @@ func lookupKeyword(val string) TokenKind {
 		}
 		if asciiEqFold(val, "group") {
 			return TokGroup
+		}
+		if asciiEqFold(val, "limit") {
+			return TokLimit
+		}
+		if asciiEqFold(val, "order") {
+			return TokOrder
 		}
 		if asciiEqFold(val, "where") {
 			return TokWhere

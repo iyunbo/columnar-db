@@ -254,6 +254,115 @@ func TestIntegrationGroupByFloat64Agg(t *testing.T) {
 }
 
 // =====================================================================
+// ORDER BY
+// =====================================================================
+
+func TestIntegrationOrderByAsc(t *testing.T) {
+	rg := makeIntegrationRG(t)
+	bs := drain(t, rg, "SELECT name, age FROM t ORDER BY age")
+	ages := bs[0].Vectors[1].Int64s()
+	for i := 1; i < len(ages); i++ {
+		if ages[i] < ages[i-1] {
+			t.Errorf("not sorted ASC: ages[%d]=%d < ages[%d]=%d", i, ages[i], i-1, ages[i-1])
+		}
+	}
+}
+
+func TestIntegrationOrderByDesc(t *testing.T) {
+	rg := makeIntegrationRG(t)
+	bs := drain(t, rg, "SELECT name, age FROM t ORDER BY age DESC")
+	ages := bs[0].Vectors[1].Int64s()
+	for i := 1; i < len(ages); i++ {
+		if ages[i] > ages[i-1] {
+			t.Errorf("not sorted DESC: ages[%d]=%d > ages[%d]=%d", i, ages[i], i-1, ages[i-1])
+		}
+	}
+}
+
+func TestIntegrationOrderByString(t *testing.T) {
+	rg := makeIntegrationRG(t)
+	bs := drain(t, rg, "SELECT name FROM t ORDER BY name")
+	names := bs[0].Vectors[0].Strings()
+	for i := 1; i < len(names); i++ {
+		if names[i] < names[i-1] {
+			t.Errorf("not sorted: names[%d]=%q < names[%d]=%q", i, names[i], i-1, names[i-1])
+		}
+	}
+}
+
+func TestIntegrationOrderByWithWhere(t *testing.T) {
+	rg := makeIntegrationRG(t)
+	bs := drain(t, rg, "SELECT age FROM t WHERE age > 30 ORDER BY age DESC")
+	ages := bs[0].Vectors[0].Int64s()
+	if len(ages) != 3 || ages[0] != 45 || ages[2] != 35 {
+		t.Errorf("got %v, want [45 40 35]", ages)
+	}
+}
+
+func TestIntegrationOrderByGroupBy(t *testing.T) {
+	rg := makeIntegrationRG(t)
+	bs := drain(t, rg, "SELECT city, COUNT(*) FROM t GROUP BY city ORDER BY city")
+	cities := bs[0].Vectors[0].Strings()
+	if cities[0] != "Lyon" || cities[1] != "Paris" {
+		t.Errorf("got %v, want [Lyon Paris]", cities)
+	}
+}
+
+// =====================================================================
+// LIMIT
+// =====================================================================
+
+func TestIntegrationLimit(t *testing.T) {
+	rg := makeIntegrationRG(t)
+	if n := drainCount(t, rg, "SELECT age FROM t LIMIT 3"); n != 3 {
+		t.Errorf("rows = %d, want 3", n)
+	}
+}
+
+func TestIntegrationLimitZero(t *testing.T) {
+	rg := makeIntegrationRG(t)
+	if n := drainCount(t, rg, "SELECT age FROM t LIMIT 0"); n != 0 {
+		t.Errorf("rows = %d, want 0", n)
+	}
+}
+
+func TestIntegrationLimitLargerThanTable(t *testing.T) {
+	rg := makeIntegrationRG(t)
+	if n := drainCount(t, rg, "SELECT age FROM t LIMIT 100"); n != 5 {
+		t.Errorf("rows = %d, want 5", n)
+	}
+}
+
+func TestIntegrationOrderByLimit(t *testing.T) {
+	rg := makeIntegrationRG(t)
+	bs := drain(t, rg, "SELECT age FROM t ORDER BY age DESC LIMIT 2")
+	n := 0
+	for _, b := range bs {
+		n += b.Len()
+	}
+	if n != 2 {
+		t.Fatalf("rows = %d, want 2", n)
+	}
+	ages := bs[0].Vectors[0].Int64s()
+	idx := bs[0].Sel.Indices()
+	if ages[idx[0]] != 45 || ages[idx[1]] != 40 {
+		t.Errorf("top 2 ages = %d, %d; want 45, 40", ages[idx[0]], ages[idx[1]])
+	}
+}
+
+func TestIntegrationGroupByOrderByLimit(t *testing.T) {
+	rg := makeIntegrationRG(t)
+	bs := drain(t, rg, "SELECT city, COUNT(*) FROM t GROUP BY city ORDER BY city LIMIT 1")
+	if len(bs) == 0 || bs[0].Len() != 1 {
+		t.Fatalf("expected 1 row")
+	}
+	city := bs[0].Vectors[0].Strings()[bs[0].Sel.Indices()[0]]
+	if city != "Lyon" {
+		t.Errorf("city = %q, want Lyon (first alphabetically)", city)
+	}
+}
+
+// =====================================================================
 // Error cases
 // =====================================================================
 
