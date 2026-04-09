@@ -2,6 +2,7 @@ package sql
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/iyunbo/columnar-db/exec"
@@ -24,13 +25,18 @@ func Plan(rg *storage.RowGroup, stmt *SelectStmt) (exec.Operator, error) {
 	// must include it so FilterOp can read it. We track whether we
 	// added an extra column so we can drop it via ProjectOp after
 	// filtering.
-	extraWhereCol := false
-	whereColIdx := -1
+	var (
+		extraWhereCol bool
+		whereColIdx   = -1
+		whereColType  storage.ColumnType
+	)
 	if stmt.Where != nil {
-		if !schemaHasColumn(schema, stmt.Where.Column) {
+		var ok bool
+		whereColType, ok = schemaLookup(schema, stmt.Where.Column)
+		if !ok {
 			return nil, fmt.Errorf("sql: planner: WHERE references unknown column %q", stmt.Where.Column)
 		}
-		idx := indexOf(scanCols, stmt.Where.Column)
+		idx := slices.Index(scanCols, stmt.Where.Column)
 		if idx < 0 {
 			scanCols = append(scanCols, stmt.Where.Column)
 			whereColIdx = len(scanCols) - 1
@@ -47,10 +53,8 @@ func Plan(rg *storage.RowGroup, stmt *SelectStmt) (exec.Operator, error) {
 
 	var op exec.Operator = scan
 
-	// WHERE → FilterOp.
 	if stmt.Where != nil {
-		colType := schemaColumnType(schema, stmt.Where.Column)
-		pred, err := buildPredicate(colType, stmt.Where)
+		pred, err := buildPredicate(whereColType, stmt.Where)
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +142,7 @@ func resolveScanColumns(schema storage.Schema, stmt *SelectStmt) ([]string, erro
 			return nil, fmt.Errorf("sql: planner: aggregate functions not implemented yet")
 		}
 		name := item.Column
-		if !schemaHasColumn(schema, name) {
+		if _, ok := schemaLookup(schema, name); !ok {
 			return nil, fmt.Errorf("sql: planner: unknown column %q", name)
 		}
 		cols = append(cols, name)
@@ -146,29 +150,14 @@ func resolveScanColumns(schema storage.Schema, stmt *SelectStmt) ([]string, erro
 	return cols, nil
 }
 
-func schemaHasColumn(schema storage.Schema, name string) bool {
-	for _, n := range schema.Names {
-		if n == name {
-			return true
-		}
-	}
-	return false
-}
-
-func schemaColumnType(schema storage.Schema, name string) storage.ColumnType {
+// schemaLookup returns the column type and true if the column
+// exists, or (zero, false) if not. One pass replaces the old
+// schemaHasColumn + schemaColumnType pair.
+func schemaLookup(schema storage.Schema, name string) (storage.ColumnType, bool) {
 	for i, n := range schema.Names {
 		if n == name {
-			return schema.Types[i]
+			return schema.Types[i], true
 		}
 	}
-	return 0 // unreachable if caller already validated
-}
-
-func indexOf(ss []string, s string) int {
-	for i, v := range ss {
-		if v == s {
-			return i
-		}
-	}
-	return -1
+	return 0, false
 }

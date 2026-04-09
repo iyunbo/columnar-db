@@ -144,6 +144,21 @@ func (k TokenKind) String() string {
 	return fmt.Sprintf("TokenKind(%d)", k)
 }
 
+// IsComparator returns true for =, !=, <, <=, >, >=.
+func (k TokenKind) IsComparator() bool {
+	return k == TokEq || k == TokNe || k == TokLt || k == TokLe || k == TokGt || k == TokGe
+}
+
+// IsLiteral returns true for int, float, and string literals.
+func (k TokenKind) IsLiteral() bool {
+	return k == TokInt || k == TokFloat || k == TokString
+}
+
+// IsAggKeyword returns true for COUNT, SUM, MIN, MAX, AVG.
+func (k TokenKind) IsAggKeyword() bool {
+	return k == TokCount || k == TokSum || k == TokMin || k == TokMax || k == TokAvg
+}
+
 // Token is one lexical unit produced by the Lexer. Literal values
 // are stored in the Value field as the raw source substring;
 // numeric parsing happens at the parser level so the lexer stays
