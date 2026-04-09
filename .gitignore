@@ -4,3 +4,4 @@ bin/
 .DS_Store
 data/
 tmp/
+columnar-db
