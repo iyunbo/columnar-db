@@ -120,19 +120,15 @@
 
   <h1>columnar-db — Architecture</h1>
   <p class="subtitle">
-    Static snapshot of the codebase as of Phase 5 Step 1
-    (<code>main</code>, exec package has the <code>Operator</code> interface +
+    Static snapshot of the codebase as of Phase 5 Step 2
+    (<code>sql/</code> package: <code>Tokenize</code> (full lexer),
+    <code>Token</code>/<code>TokenKind</code>;
+    <code>exec/</code>: <code>Operator</code> interface +
     <code>ScanOp</code>, <code>FilterOp</code>, <code>ProjectOp</code>,
-    <code>AggregateOp</code> [scalar], <code>GroupByOp</code> [single-key hash
-    fast path + multi-key composite-key path, unbounded groups via
-    cursor-based multi-batch emission],
+    <code>AggregateOp</code>, <code>GroupByOp</code>,
     <code>Vector</code>, <code>Batch</code>, <code>Selection</code>,
-    <code>Predicate</code>, <code>Aggregator</code> with 9 concrete
-    implementations. New <code>sql/</code> package: skeleton only —
-    <code>Token</code>/<code>TokenKind</code> types, lexer + Execute
-    stubs; full Lexer → Parser → Planner lands Steps 2–6. The SVG
-    layer diagram below will gain an <code>sql/</code> box in Step 5
-    once the planner is wired up).
+    <code>Predicate</code>, <code>Aggregator</code> ×9.
+    Step 3 — AST + parser + first working SELECT — is next).
   </p>
 
   <h2>Layered View</h2>

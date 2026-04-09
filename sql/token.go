@@ -57,6 +57,8 @@ const (
 
 	// Operators
 	TokStar  // *
+	TokMinus // -
+	TokPlus  // +
 	TokEq    // =
 	TokNe    // !=
 	TokLt    // <
@@ -112,6 +114,10 @@ func (k TokenKind) String() string {
 		return "AVG"
 	case TokStar:
 		return "*"
+	case TokMinus:
+		return "-"
+	case TokPlus:
+		return "+"
 	case TokEq:
 		return "="
 	case TokNe:
