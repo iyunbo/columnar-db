@@ -136,6 +136,29 @@ func TestExecuteSemicolonOptional(t *testing.T) {
 	}
 }
 
+func TestExecuteDuplicateColumns(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT age, age FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, ok := op.Next()
+	if !ok {
+		t.Fatal("no batch")
+	}
+	if b.NumColumns() != 2 {
+		t.Fatalf("columns = %d, want 2", b.NumColumns())
+	}
+	// Both columns should have the same values.
+	a0 := b.Vectors[0].Int64s()
+	a1 := b.Vectors[1].Int64s()
+	for i := range a0 {
+		if a0[i] != a1[i] {
+			t.Errorf("row %d: col0=%d col1=%d", i, a0[i], a1[i])
+		}
+	}
+}
+
 func TestExecuteLexerError(t *testing.T) {
 	rg := makeTestRowGroup(t)
 	_, err := Execute(rg, "SELECT @")

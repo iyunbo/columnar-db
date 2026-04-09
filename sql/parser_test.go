@@ -123,6 +123,13 @@ func TestParseErrorHasOffset(t *testing.T) {
 	}
 }
 
+func TestParseTrailingCommaErrors(t *testing.T) {
+	_, err := Parse(mustTokenize(t, "SELECT a, FROM t"))
+	if err == nil {
+		t.Fatal("trailing comma in select list should error")
+	}
+}
+
 func TestParseCaseInsensitive(t *testing.T) {
 	stmt, err := Parse(mustTokenize(t, "select age from T"))
 	if err != nil {
