@@ -120,15 +120,18 @@
 
   <h1>columnar-db — Architecture</h1>
   <p class="subtitle">
-    Static snapshot of the codebase as of Phase 5 Step 2
-    (<code>sql/</code> package: <code>Tokenize</code> (full lexer),
-    <code>Token</code>/<code>TokenKind</code>;
+    Static snapshot of the codebase as of end of Phase 5
+    (<code>sql/</code> package: full SQL frontend —
+    <code>Tokenize</code>, <code>Parse</code>, <code>Plan</code>,
+    <code>Execute</code>. Supports SELECT/WHERE/GROUP BY over a
+    single RowGroup with 5 aggregate functions.
     <code>exec/</code>: <code>Operator</code> interface +
     <code>ScanOp</code>, <code>FilterOp</code>, <code>ProjectOp</code>,
     <code>AggregateOp</code>, <code>GroupByOp</code>,
     <code>Vector</code>, <code>Batch</code>, <code>Selection</code>,
     <code>Predicate</code>, <code>Aggregator</code> ×9.
-    Step 3 — AST + parser + first working SELECT — is next).
+    Parity benchmark: SQL adds +0.3% (low card) / +3.8% (high
+    card) overhead on the reuse path. Phase 6 is next).
   </p>
 
   <h2>Layered View</h2>
