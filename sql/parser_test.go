@@ -89,17 +89,50 @@ func TestParseMissingTableName(t *testing.T) {
 func TestParseExtraTokensAfterStatement(t *testing.T) {
 	_, err := Parse(mustTokenize(t, "SELECT age FROM t WHERE"))
 	if err == nil {
-		t.Fatal("WHERE should error in Step 3 (not implemented)")
+		t.Fatal("incomplete WHERE should error")
 	}
 }
 
-func TestParseWhereNotImplemented(t *testing.T) {
-	_, err := Parse(mustTokenize(t, "SELECT age FROM t WHERE age > 30"))
-	if err == nil {
-		t.Fatal("WHERE should error in Step 3")
+func TestParseWhere(t *testing.T) {
+	stmt, err := Parse(mustTokenize(t, "SELECT age FROM t WHERE age > 30"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "WHERE") {
-		t.Errorf("error should mention WHERE, got %q", err.Error())
+	if stmt.Where == nil {
+		t.Fatal("Where is nil")
+	}
+	if stmt.Where.Column != "age" {
+		t.Errorf("Where.Column = %q", stmt.Where.Column)
+	}
+	if stmt.Where.Op != TokGt {
+		t.Errorf("Where.Op = %v", stmt.Where.Op)
+	}
+	if stmt.Where.Literal.Value != "30" {
+		t.Errorf("Where.Literal = %q", stmt.Where.Literal.Value)
+	}
+}
+
+func TestParseWhereStringLiteral(t *testing.T) {
+	stmt, err := Parse(mustTokenize(t, "SELECT name FROM t WHERE city = 'Paris'"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stmt.Where.Literal.Kind != TokString || stmt.Where.Literal.Value != "Paris" {
+		t.Errorf("Where.Literal = %+v", stmt.Where.Literal)
+	}
+}
+
+func TestParseWhereMissingColumn(t *testing.T) {
+	_, err := Parse(mustTokenize(t, "SELECT age FROM t WHERE > 30"))
+	if err == nil {
+		t.Fatal("missing column should error")
+	}
+}
+
+func TestParseWhereMissingLiteral(t *testing.T) {
+	_, err := Parse(mustTokenize(t, "SELECT age FROM t WHERE age >"))
+	if err == nil {
+		t.Fatal("missing literal should error")
 	}
 }
 

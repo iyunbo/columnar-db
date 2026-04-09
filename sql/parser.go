@@ -56,9 +56,13 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		FromTable: table.Value,
 	}
 
-	// WHERE clause (Step 4 fills in the predicate parser).
+	// WHERE clause.
 	if p.peek().Kind == TokWhere {
-		return nil, p.errorf("WHERE clause not implemented yet")
+		pred, err := p.parsePredicate()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Where = pred
 	}
 
 	// GROUP BY (Step 5 fills in).
@@ -134,6 +138,39 @@ func (p *parser) parseSelectItem() (SelectItem, error) {
 	}
 	p.advance()
 	return SelectItem{Column: tok.Value}, nil
+}
+
+// parsePredicate handles: WHERE column_ref comparator literal
+func (p *parser) parsePredicate() (*Predicate, error) {
+	p.advance() // consume WHERE
+
+	col := p.peek()
+	if col.Kind != TokIdent {
+		return nil, p.errorf("expected column name after WHERE, got %s", col.Kind)
+	}
+	p.advance()
+
+	op := p.peek()
+	if !isComparator(op.Kind) {
+		return nil, p.errorf("expected comparator (=, !=, <, <=, >, >=) after column name, got %s", op.Kind)
+	}
+	p.advance()
+
+	lit := p.peek()
+	if !isLiteral(lit.Kind) {
+		return nil, p.errorf("expected literal value after comparator, got %s %q", lit.Kind, lit.Value)
+	}
+	p.advance()
+
+	return &Predicate{Column: col.Value, Op: op.Kind, Literal: lit}, nil
+}
+
+func isComparator(k TokenKind) bool {
+	return k == TokEq || k == TokNe || k == TokLt || k == TokLe || k == TokGt || k == TokGe
+}
+
+func isLiteral(k TokenKind) bool {
+	return k == TokInt || k == TokFloat || k == TokString
 }
 
 func isAggKeyword(k TokenKind) bool {
