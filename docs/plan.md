@@ -1,5 +1,13 @@
 # Columnar DB — Detailed Plan
 
+> **Status: Phases 1–5 complete.** The project ships a working SQL
+> engine with an interactive REPL, vectorized execution, columnar
+> storage, and honest benchmarks. See [phase5-summary.md](phase5-summary.md)
+> for what shipped and [phase4-benchmark.md](phase4-benchmark.md)
+> for the architecture decision. Phases 6–8 below are the original
+> roadmap stretch goals — deferred as out of scope for the current
+> project (see the README for rationale).
+
 ## Goal
 
 Build a column-oriented analytical database from scratch in Go. Understand how modern OLAP engines (ClickHouse, DuckDB, SingleStore) work under the hood by implementing each layer ourselves.

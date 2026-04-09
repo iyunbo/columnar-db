@@ -10,6 +10,8 @@ SELECT city, COUNT(*), AVG(age)
 FROM people
 WHERE age > 30
 GROUP BY city
+ORDER BY city
+LIMIT 10
 ```
 
 and have the engine answer it without hand-wiring `ScanOp →
@@ -22,6 +24,8 @@ SELECT { * | col_list | agg_call [, ...] }
 FROM identifier
 [ WHERE column { = | != | < | <= | > | >= } literal ]
 [ GROUP BY column [, column]* ]
+[ ORDER BY column [ ASC | DESC ] ]
+[ LIMIT n ]
 ```
 
 - Aggregate functions: `COUNT(*)`, `COUNT(col)`, `SUM`, `MIN`,
@@ -44,6 +48,7 @@ FROM identifier
 | `sql/parser.go` | Hand-rolled recursive-descent parser |
 | `sql/planner.go` | AST → exec.Operator tree |
 | `sql/sql.go` | `Execute(rg, query) → (exec.Operator, error)` |
+| `cmd/columnar-db/main.go` | Interactive REPL with demo dataset |
 
 ### Operator trees the planner produces
 
@@ -56,6 +61,8 @@ SELECT key, agg FROM t       → ScanOp [→ FilterOp] → GroupByOp
   GROUP BY key                  [→ ProjectOp if reorder needed]
 SELECT k1, k2, agg FROM t   → ScanOp [→ FilterOp] → GroupByOpMulti
   GROUP BY k1, k2               [→ ProjectOp if reorder needed]
+... ORDER BY col             → ... → OrderByOp
+... LIMIT n                  → ... → LimitOp
 ```
 
 ## Parity benchmark
@@ -85,7 +92,7 @@ the per-query setup cost a prepared-statement pattern avoids.
 ## Known limitations
 
 - No `AND`/`OR` compound predicates.
-- No `HAVING`, `ORDER BY`, `LIMIT`.
+- No `HAVING`.
 - No `JOIN`, subqueries, CTEs.
 - No arithmetic expressions in SELECT (`price * 1.1`).
 - No Float64 WHERE predicates.
@@ -97,18 +104,20 @@ the per-query setup cost a prepared-statement pattern avoids.
 
 ## Test coverage
 
-464 tests passing across 4 packages. The `sql/` package alone has
-94 tests covering every grammar production, every planner error
+474 tests passing across 4 packages. The `sql/` package alone has
+104 tests covering every grammar production, every planner error
 path, and end-to-end integration across the full SELECT / WHERE /
-GROUP BY matrix.
+GROUP BY / ORDER BY / LIMIT matrix.
 
 ## What Phase 5 did NOT deliver (deferred to Phase 6+)
 
 - SQL optimizer (predicate pushdown, projection pushdown, join
-  ordering) — Phase 6.
-- JOIN of any kind — Phase 6.
-- HAVING, ORDER BY, LIMIT — Phase 6 or 5.5 polish.
-- Multi-table catalog and DDL — separate write-path phase.
+  ordering).
+- JOIN of any kind.
+- HAVING.
+- Multi-table catalog and DDL.
 - Prepared statements / query caching — the `Reset()` path is the
   manual equivalent; a `Prepare(query) → Statement` API is a
   natural follow-up.
+- Multi-column ORDER BY.
+- Float64 WHERE predicates.
