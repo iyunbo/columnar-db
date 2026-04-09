@@ -65,9 +65,13 @@ func (p *parser) parseSelect() (*SelectStmt, error) {
 		stmt.Where = pred
 	}
 
-	// GROUP BY (Step 5 fills in).
+	// GROUP BY.
 	if p.peek().Kind == TokGroup {
-		return nil, p.errorf("GROUP BY not implemented yet")
+		cols, err := p.parseGroupBy()
+		if err != nil {
+			return nil, err
+		}
+		stmt.GroupBy = cols
 	}
 
 	return stmt, nil
@@ -162,6 +166,28 @@ func (p *parser) parsePredicate() (*Predicate, error) {
 	return &Predicate{Column: col.Value, Op: op.Kind, Literal: lit}, nil
 }
 
+
+// parseGroupBy handles: GROUP BY col [, col]*
+func (p *parser) parseGroupBy() ([]string, error) {
+	p.advance() // consume GROUP
+	if err := p.expect(TokBy); err != nil {
+		return nil, err
+	}
+	var cols []string
+	for {
+		tok := p.peek()
+		if tok.Kind != TokIdent {
+			return nil, p.errorf("expected column name in GROUP BY, got %s", tok.Kind)
+		}
+		cols = append(cols, tok.Value)
+		p.advance()
+		if p.peek().Kind != TokComma {
+			break
+		}
+		p.advance()
+	}
+	return cols, nil
+}
 
 // ---------------------------------------------------------------
 // helpers

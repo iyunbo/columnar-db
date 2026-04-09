@@ -301,6 +301,189 @@ func TestExecuteWhereAllOps(t *testing.T) {
 	}
 }
 
+// =====================================================================
+// Aggregation (Step 5)
+// =====================================================================
+
+func TestExecuteScalarCount(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT COUNT(*) FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, ok := op.Next()
+	if !ok {
+		t.Fatal("no batch")
+	}
+	if b.Len() != 1 {
+		t.Fatalf("rows = %d, want 1", b.Len())
+	}
+	if b.Vectors[0].Int64s()[0] != 5 {
+		t.Errorf("COUNT(*) = %d, want 5", b.Vectors[0].Int64s()[0])
+	}
+}
+
+func TestExecuteScalarCountWithWhere(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT COUNT(*) FROM t WHERE age > 30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := op.Next()
+	// ages 25,30,35,40,45 → 3 survive
+	if b.Vectors[0].Int64s()[0] != 3 {
+		t.Errorf("COUNT(*) WHERE age > 30 = %d, want 3", b.Vectors[0].Int64s()[0])
+	}
+}
+
+func TestExecuteScalarMultiAgg(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT COUNT(*), SUM(age), MIN(age), MAX(age) FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := op.Next()
+	count := b.Vectors[0].Int64s()[0]
+	sum := b.Vectors[1].Int64s()[0]
+	min := b.Vectors[2].Int64s()[0]
+	max := b.Vectors[3].Int64s()[0]
+	if count != 5 || sum != 175 || min != 25 || max != 45 {
+		t.Errorf("count=%d sum=%d min=%d max=%d", count, sum, min, max)
+	}
+}
+
+func TestExecuteGroupBySingleKey(t *testing.T) {
+	// SELECT city, COUNT(*), SUM(age) FROM t GROUP BY city
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT city, COUNT(*), SUM(age) FROM people GROUP BY city")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type row struct {
+		city  string
+		count int64
+		sum   int64
+	}
+	got := map[string]row{}
+	for {
+		b, ok := op.Next()
+		if !ok {
+			break
+		}
+		cities := b.Vectors[0].Strings()
+		counts := b.Vectors[1].Int64s()
+		sums := b.Vectors[2].Int64s()
+		for _, i := range b.Sel.Indices() {
+			got[cities[i]] = row{cities[i], counts[i], sums[i]}
+		}
+	}
+	// Fixture: Paris(25,35,45)=3 rows sum=105; Lyon(30,40)=2 rows sum=70
+	if got["Paris"].count != 3 || got["Paris"].sum != 105 {
+		t.Errorf("Paris: %+v", got["Paris"])
+	}
+	if got["Lyon"].count != 2 || got["Lyon"].sum != 70 {
+		t.Errorf("Lyon: %+v", got["Lyon"])
+	}
+}
+
+func TestExecuteGroupByWithWhere(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT city, COUNT(*) FROM t WHERE age > 30 GROUP BY city")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for {
+		b, ok := op.Next()
+		if !ok {
+			break
+		}
+		cities := b.Vectors[0].Strings()
+		counts := b.Vectors[1].Int64s()
+		for _, i := range b.Sel.Indices() {
+			got[cities[i]] = counts[i]
+		}
+	}
+	// After age > 30: Paris(35,45)=2, Lyon(40)=1
+	if got["Paris"] != 2 || got["Lyon"] != 1 {
+		t.Errorf("got %v", got)
+	}
+}
+
+func TestExecuteGroupByMultiKey(t *testing.T) {
+	// Multi-key: GROUP BY city, age (produces one group per unique pair)
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT city, age, COUNT(*) FROM t GROUP BY city, age")
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for {
+		b, ok := op.Next()
+		if !ok {
+			break
+		}
+		total += b.Len()
+		// Each row is a unique (city, age) pair → COUNT must be 1.
+		counts := b.Vectors[2].Int64s()
+		for _, i := range b.Sel.Indices() {
+			if counts[i] != 1 {
+				t.Errorf("expected COUNT=1 per unique pair, got %d", counts[i])
+			}
+		}
+	}
+	// 5 rows with unique (city, age) → 5 groups.
+	if total != 5 {
+		t.Errorf("total groups = %d, want 5", total)
+	}
+}
+
+func TestExecuteAggOnStringColumnErrors(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	_, err := Execute(rg, "SELECT SUM(city) FROM t")
+	if err == nil {
+		t.Fatal("SUM on string column should error")
+	}
+}
+
+func TestExecutePlainColumnWithoutGroupByErrors(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	_, err := Execute(rg, "SELECT city, COUNT(*) FROM t")
+	if err == nil {
+		t.Fatal("plain column with aggregate and no GROUP BY should error")
+	}
+}
+
+func TestExecuteColumnNotInGroupByErrors(t *testing.T) {
+	rg := makeTestRowGroup(t)
+	_, err := Execute(rg, "SELECT city, name, COUNT(*) FROM t GROUP BY city")
+	if err == nil {
+		t.Fatal("column not in GROUP BY should error")
+	}
+}
+
+func TestExecuteGroupByInterleavedSelectOrder(t *testing.T) {
+	// SELECT list: COUNT(*), city — different from GroupByOp output
+	// [city, COUNT(*)]. Planner must add ProjectOp to reorder.
+	rg := makeTestRowGroup(t)
+	op, err := Execute(rg, "SELECT COUNT(*), city FROM t GROUP BY city")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, ok := op.Next()
+	if !ok {
+		t.Fatal("no batch")
+	}
+	// Column 0 should be COUNT (int64), column 1 should be city (string).
+	if b.Vectors[0].Type != storage.TypeInt64 {
+		t.Errorf("col 0 type = %s, want int64 (COUNT)", b.Vectors[0].Type)
+	}
+	if b.Vectors[1].Type != storage.TypeString {
+		t.Errorf("col 1 type = %s, want string (city)", b.Vectors[1].Type)
+	}
+}
+
 func TestExecuteLexerError(t *testing.T) {
 	rg := makeTestRowGroup(t)
 	_, err := Execute(rg, "SELECT @")

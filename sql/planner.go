@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/iyunbo/columnar-db/exec"
 	"github.com/iyunbo/columnar-db/storage"
@@ -15,35 +16,31 @@ import (
 func Plan(rg *storage.RowGroup, stmt *SelectStmt) (exec.Operator, error) {
 	schema := rg.Schema()
 
-	// Collect the column names the ScanOp needs to read.
-	scanCols, err := resolveScanColumns(schema, stmt)
+	// Classify: does the SELECT list contain aggregates?
+	hasAgg := false
+	for _, item := range stmt.Items {
+		if item.AggFunc != "" {
+			hasAgg = true
+			break
+		}
+	}
+
+	if hasAgg {
+		return planAggregation(rg, schema, stmt)
+	}
+	return planSimpleSelect(rg, schema, stmt)
+}
+
+// planSimpleSelect handles SELECT (with optional WHERE, no aggregation).
+func planSimpleSelect(rg *storage.RowGroup, schema storage.Schema, stmt *SelectStmt) (exec.Operator, error) {
+	scanCols, err := resolvePlainScanColumns(schema, stmt)
 	if err != nil {
 		return nil, err
 	}
 
-	// If WHERE references a column not in the select list, the scan
-	// must include it so FilterOp can read it. We track whether we
-	// added an extra column so we can drop it via ProjectOp after
-	// filtering.
-	var (
-		extraWhereCol bool
-		whereColIdx   = -1
-		whereColType  storage.ColumnType
-	)
-	if stmt.Where != nil {
-		var ok bool
-		whereColType, ok = schemaLookup(schema, stmt.Where.Column)
-		if !ok {
-			return nil, fmt.Errorf("sql: planner: WHERE references unknown column %q", stmt.Where.Column)
-		}
-		idx := slices.Index(scanCols, stmt.Where.Column)
-		if idx < 0 {
-			scanCols = append(scanCols, stmt.Where.Column)
-			whereColIdx = len(scanCols) - 1
-			extraWhereCol = true
-		} else {
-			whereColIdx = idx
-		}
+	scanCols, whereColIdx, extraWhereCol, whereColType, err := expandWhereColumn(schema, scanCols, stmt)
+	if err != nil {
+		return nil, err
 	}
 
 	scan, err := exec.NewScanOp(rg, scanCols)
@@ -51,22 +48,11 @@ func Plan(rg *storage.RowGroup, stmt *SelectStmt) (exec.Operator, error) {
 		return nil, fmt.Errorf("sql: planner: %w", err)
 	}
 
-	var op exec.Operator = scan
-
-	if stmt.Where != nil {
-		pred, err := buildPredicate(whereColType, stmt.Where)
-		if err != nil {
-			return nil, err
-		}
-		filter, err := exec.NewFilterOp(op, whereColIdx, pred)
-		if err != nil {
-			return nil, fmt.Errorf("sql: planner: %w", err)
-		}
-		op = filter
+	op, err := applyFilter(scan, stmt, whereColIdx, whereColType)
+	if err != nil {
+		return nil, err
 	}
 
-	// If we added an extra column for WHERE, drop it via ProjectOp
-	// so the output matches the original select list.
 	if extraWhereCol {
 		projCols := make([]int, len(scanCols)-1)
 		for i := range projCols {
@@ -82,12 +68,256 @@ func Plan(rg *storage.RowGroup, stmt *SelectStmt) (exec.Operator, error) {
 	return op, nil
 }
 
-// buildPredicate creates an exec.Predicate from the parsed WHERE
-// clause. Coercion rules (from docs/phase5-steps.md):
-//
-//   - Int literal + Int64 column → Int64 predicate
-//   - String literal + String column → StringEq (= only)
-//   - Other combinations → planner error
+// planAggregation handles SELECT with aggregate functions (with or
+// without GROUP BY).
+func planAggregation(rg *storage.RowGroup, schema storage.Schema, stmt *SelectStmt) (exec.Operator, error) {
+	groupKeys := stmt.GroupBy
+
+	// Validate: plain columns must be in GROUP BY.
+	for _, item := range stmt.Items {
+		if item.Column != "" && !item.Star {
+			if len(groupKeys) == 0 {
+				return nil, fmt.Errorf("sql: planner: column %q must appear in GROUP BY or be inside an aggregate function", item.Column)
+			}
+			if slices.Index(groupKeys, item.Column) < 0 {
+				return nil, fmt.Errorf("sql: planner: column %q is not in GROUP BY clause", item.Column)
+			}
+		}
+	}
+
+	// Validate GROUP BY columns exist.
+	for _, k := range groupKeys {
+		if _, ok := schemaLookup(schema, k); !ok {
+			return nil, fmt.Errorf("sql: planner: GROUP BY references unknown column %q", k)
+		}
+	}
+
+	// Collect all columns the scan needs (deduped): GROUP BY keys +
+	// aggregate input columns.
+	scanCols := make([]string, 0, len(groupKeys)+len(stmt.Items))
+	addUnique := func(name string) {
+		if slices.Index(scanCols, name) < 0 {
+			scanCols = append(scanCols, name)
+		}
+	}
+	for _, k := range groupKeys {
+		addUnique(k)
+	}
+	for _, item := range stmt.Items {
+		if item.AggFunc != "" && item.AggArg != "*" {
+			if _, ok := schemaLookup(schema, item.AggArg); !ok {
+				return nil, fmt.Errorf("sql: planner: aggregate %s references unknown column %q", item.AggFunc, item.AggArg)
+			}
+			addUnique(item.AggArg)
+		}
+	}
+
+	// ScanOp requires at least one column. If only COUNT(*) is used
+	// (no key columns, no column-based aggregates), scan the first
+	// schema column to get the row count.
+	if len(scanCols) == 0 {
+		scanCols = append(scanCols, schema.Names[0])
+	}
+
+	// WHERE column expansion.
+	scanCols, whereColIdx, _, whereColType, err := expandWhereColumn(schema, scanCols, stmt)
+	if err != nil {
+		return nil, err
+	}
+
+	scan, err := exec.NewScanOp(rg, scanCols)
+	if err != nil {
+		return nil, fmt.Errorf("sql: planner: %w", err)
+	}
+
+	op, err := applyFilter(scan, stmt, whereColIdx, whereColType)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build aggregate specs. ColIndex = position in scanCols.
+	specs := make([]exec.AggregateSpec, 0, len(stmt.Items))
+	for _, item := range stmt.Items {
+		if item.AggFunc == "" {
+			continue
+		}
+		agg, colIdx, err := buildAggregator(schema, scanCols, item)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, exec.AggregateSpec{
+			Name:     item.AggFunc,
+			ColIndex: colIdx,
+			Agg:      agg,
+		})
+	}
+
+	if len(groupKeys) == 0 {
+		aggOp, err := exec.NewAggregateOp(op, specs)
+		if err != nil {
+			return nil, fmt.Errorf("sql: planner: %w", err)
+		}
+		return aggOp, nil
+	}
+
+	// Grouped aggregation.
+	keyIdxs := make([]int, len(groupKeys))
+	keyTypes := make([]storage.ColumnType, len(groupKeys))
+	for i, k := range groupKeys {
+		keyIdxs[i] = slices.Index(scanCols, k)
+		keyTypes[i], _ = schemaLookup(schema, k)
+	}
+
+	var groupOp exec.Operator
+	if len(groupKeys) == 1 {
+		g, err := exec.NewGroupByOp(op, keyIdxs[0], keyTypes[0], specs)
+		if err != nil {
+			return nil, fmt.Errorf("sql: planner: %w", err)
+		}
+		groupOp = g
+	} else {
+		g, err := exec.NewGroupByOpMulti(op, keyIdxs, keyTypes, specs)
+		if err != nil {
+			return nil, fmt.Errorf("sql: planner: %w", err)
+		}
+		groupOp = g
+	}
+
+	// GroupByOp output: [key0..keyN, agg0..aggN]. If the SELECT
+	// list interleaves keys and aggs differently, reorder via
+	// ProjectOp.
+	projMap := buildOutputProjection(stmt.Items, groupKeys)
+	isIdentity := true
+	for i, p := range projMap {
+		if p != i {
+			isIdentity = false
+			break
+		}
+	}
+	if !isIdentity {
+		proj, err := exec.NewProjectOp(groupOp, projMap)
+		if err != nil {
+			return nil, fmt.Errorf("sql: planner: %w", err)
+		}
+		return proj, nil
+	}
+	return groupOp, nil
+}
+
+// buildOutputProjection maps SELECT-list positions to GroupByOp
+// output positions ([keys..., aggs...]).
+func buildOutputProjection(items []SelectItem, groupKeys []string) []int {
+	projMap := make([]int, len(items))
+	aggIdx := 0
+	for i, item := range items {
+		if item.AggFunc != "" {
+			projMap[i] = len(groupKeys) + aggIdx
+			aggIdx++
+		} else {
+			projMap[i] = slices.Index(groupKeys, item.Column)
+		}
+	}
+	return projMap
+}
+
+// buildAggregator creates the right exec.Aggregator for the given
+// aggregate function and input column type.
+func buildAggregator(schema storage.Schema, scanCols []string, item SelectItem) (exec.Aggregator, int, error) {
+	funcName := strings.ToUpper(item.AggFunc)
+
+	if funcName == "COUNT" && item.AggArg == "*" {
+		return &exec.CountStar{}, 0, nil
+	}
+
+	colType, ok := schemaLookup(schema, item.AggArg)
+	if !ok {
+		return nil, 0, fmt.Errorf("sql: planner: aggregate %s references unknown column %q", funcName, item.AggArg)
+	}
+	colIdx := slices.Index(scanCols, item.AggArg)
+
+	switch funcName {
+	case "COUNT":
+		return &exec.CountStar{}, colIdx, nil
+	case "SUM":
+		switch colType {
+		case storage.TypeInt64:
+			return &exec.Int64Sum{}, colIdx, nil
+		case storage.TypeFloat64:
+			return &exec.Float64Sum{}, colIdx, nil
+		default:
+			return nil, 0, fmt.Errorf("sql: planner: SUM not supported on %s column %q", colType, item.AggArg)
+		}
+	case "MIN":
+		switch colType {
+		case storage.TypeInt64:
+			return &exec.Int64Min{}, colIdx, nil
+		case storage.TypeFloat64:
+			return &exec.Float64Min{}, colIdx, nil
+		default:
+			return nil, 0, fmt.Errorf("sql: planner: MIN not supported on %s column %q", colType, item.AggArg)
+		}
+	case "MAX":
+		switch colType {
+		case storage.TypeInt64:
+			return &exec.Int64Max{}, colIdx, nil
+		case storage.TypeFloat64:
+			return &exec.Float64Max{}, colIdx, nil
+		default:
+			return nil, 0, fmt.Errorf("sql: planner: MAX not supported on %s column %q", colType, item.AggArg)
+		}
+	case "AVG":
+		switch colType {
+		case storage.TypeInt64:
+			return &exec.Int64Avg{}, colIdx, nil
+		case storage.TypeFloat64:
+			return &exec.Float64Avg{}, colIdx, nil
+		default:
+			return nil, 0, fmt.Errorf("sql: planner: AVG not supported on %s column %q", colType, item.AggArg)
+		}
+	}
+	return nil, 0, fmt.Errorf("sql: planner: unknown aggregate function %q", funcName)
+}
+
+// ---------------------------------------------------------------
+// shared helpers
+// ---------------------------------------------------------------
+
+// expandWhereColumn appends the WHERE column to scanCols if it's
+// not already present, returning the updated slice, the WHERE
+// column's index, whether an extra column was added, and the
+// column's type.
+func expandWhereColumn(schema storage.Schema, scanCols []string, stmt *SelectStmt) ([]string, int, bool, storage.ColumnType, error) {
+	if stmt.Where == nil {
+		return scanCols, -1, false, 0, nil
+	}
+	colType, ok := schemaLookup(schema, stmt.Where.Column)
+	if !ok {
+		return nil, 0, false, 0, fmt.Errorf("sql: planner: WHERE references unknown column %q", stmt.Where.Column)
+	}
+	idx := slices.Index(scanCols, stmt.Where.Column)
+	if idx < 0 {
+		scanCols = append(scanCols, stmt.Where.Column)
+		return scanCols, len(scanCols) - 1, true, colType, nil
+	}
+	return scanCols, idx, false, colType, nil
+}
+
+// applyFilter wraps op with a FilterOp if the statement has a WHERE.
+func applyFilter(op exec.Operator, stmt *SelectStmt, whereColIdx int, whereColType storage.ColumnType) (exec.Operator, error) {
+	if stmt.Where == nil {
+		return op, nil
+	}
+	pred, err := buildPredicate(whereColType, stmt.Where)
+	if err != nil {
+		return nil, err
+	}
+	filter, err := exec.NewFilterOp(op, whereColIdx, pred)
+	if err != nil {
+		return nil, fmt.Errorf("sql: planner: %w", err)
+	}
+	return filter, nil
+}
+
 func buildPredicate(colType storage.ColumnType, w *Predicate) (exec.Predicate, error) {
 	switch colType {
 	case storage.TypeInt64:
@@ -125,10 +355,9 @@ func buildPredicate(colType storage.ColumnType, w *Predicate) (exec.Predicate, e
 	return nil, fmt.Errorf("sql: planner: unsupported column type %s for WHERE", colType)
 }
 
-// resolveScanColumns maps the select list to the RowGroup's schema,
-// returning the column names in select-list order. SELECT * expands
-// to all columns in schema order.
-func resolveScanColumns(schema storage.Schema, stmt *SelectStmt) ([]string, error) {
+// resolvePlainScanColumns maps a non-aggregate select list to
+// column names. SELECT * expands to all schema columns.
+func resolvePlainScanColumns(schema storage.Schema, stmt *SelectStmt) ([]string, error) {
 	if len(stmt.Items) == 1 && stmt.Items[0].Star {
 		return schema.Names, nil
 	}
@@ -139,20 +368,16 @@ func resolveScanColumns(schema storage.Schema, stmt *SelectStmt) ([]string, erro
 			return nil, fmt.Errorf("sql: planner: * must be the only select item when used")
 		}
 		if item.AggFunc != "" {
-			return nil, fmt.Errorf("sql: planner: aggregate functions not implemented yet")
+			return nil, fmt.Errorf("sql: planner: unexpected aggregate in non-aggregate query")
 		}
-		name := item.Column
-		if _, ok := schemaLookup(schema, name); !ok {
-			return nil, fmt.Errorf("sql: planner: unknown column %q", name)
+		if _, ok := schemaLookup(schema, item.Column); !ok {
+			return nil, fmt.Errorf("sql: planner: unknown column %q", item.Column)
 		}
-		cols = append(cols, name)
+		cols = append(cols, item.Column)
 	}
 	return cols, nil
 }
 
-// schemaLookup returns the column type and true if the column
-// exists, or (zero, false) if not. One pass replaces the old
-// schemaHasColumn + schemaColumnType pair.
 func schemaLookup(schema storage.Schema, name string) (storage.ColumnType, bool) {
 	for i, n := range schema.Names {
 		if n == name {

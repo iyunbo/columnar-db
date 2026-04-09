@@ -136,13 +136,30 @@ func TestParseWhereMissingLiteral(t *testing.T) {
 	}
 }
 
-func TestParseGroupByNotImplemented(t *testing.T) {
-	_, err := Parse(mustTokenize(t, "SELECT city FROM t GROUP BY city"))
-	if err == nil {
-		t.Fatal("GROUP BY should error in Step 3")
+func TestParseGroupBy(t *testing.T) {
+	stmt, err := Parse(mustTokenize(t, "SELECT city, COUNT(*) FROM t GROUP BY city"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "GROUP BY") {
-		t.Errorf("error should mention GROUP BY, got %q", err.Error())
+	if len(stmt.GroupBy) != 1 || stmt.GroupBy[0] != "city" {
+		t.Fatalf("GroupBy = %v, want [city]", stmt.GroupBy)
+	}
+}
+
+func TestParseGroupByMultiKey(t *testing.T) {
+	stmt, err := Parse(mustTokenize(t, "SELECT city, age, COUNT(*) FROM t GROUP BY city, age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stmt.GroupBy) != 2 || stmt.GroupBy[0] != "city" || stmt.GroupBy[1] != "age" {
+		t.Fatalf("GroupBy = %v, want [city, age]", stmt.GroupBy)
+	}
+}
+
+func TestParseGroupByMissingColumn(t *testing.T) {
+	_, err := Parse(mustTokenize(t, "SELECT city FROM t GROUP BY"))
+	if err == nil {
+		t.Fatal("missing GROUP BY column should error")
 	}
 }
 
