@@ -123,19 +123,44 @@
 </svg>
 
   <h2>Query Pipeline</h2>
-<pre><code>SELECT city, COUNT(*), AVG(age)
-FROM people WHERE age > 30
-GROUP BY city ORDER BY city
+  <p style="margin-bottom:0.5rem;"><code>SELECT city, COUNT(*), AVG(age) FROM people WHERE age > 30 GROUP BY city ORDER BY city</code></p>
 
-  ScanOp          ← reads RowGroup, yields Batches
-    ↓
-  FilterOp        ← narrows selection (age > 30)
-    ↓
-  GroupByOp       ← hashes by city, runs aggregators
-    ↓
-  OrderByOp       ← sorts result by city ASC
-    ↓
-  results</code></pre>
+<svg viewBox="0 0 600 340" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13" style="max-width:420px;">
+  <defs>
+    <marker id="arrDown" viewBox="0 0 10 10" refX="5" refY="9"
+            markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 5 10 L 10 0 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+
+  <!-- ScanOp -->
+  <rect x="140" y="10" width="200" height="42" rx="8" fill="#e4f5e7" stroke="#7ee787"/>
+  <text x="240" y="36" text-anchor="middle" fill="#1a1a1a" font-weight="600">ScanOp</text>
+  <text x="360" y="36" fill="#666" font-size="11">reads RowGroup, yields Batches</text>
+  <line x1="240" y1="52" x2="240" y2="72" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrDown)"/>
+
+  <!-- FilterOp -->
+  <rect x="140" y="76" width="200" height="42" rx="8" fill="#e4f5e7" stroke="#7ee787"/>
+  <text x="240" y="102" text-anchor="middle" fill="#1a1a1a" font-weight="600">FilterOp</text>
+  <text x="360" y="102" fill="#666" font-size="11">narrows selection (age &gt; 30)</text>
+  <line x1="240" y1="118" x2="240" y2="138" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrDown)"/>
+
+  <!-- GroupByOp -->
+  <rect x="140" y="142" width="200" height="42" rx="8" fill="#e4f5e7" stroke="#7ee787"/>
+  <text x="240" y="168" text-anchor="middle" fill="#1a1a1a" font-weight="600">GroupByOp</text>
+  <text x="360" y="168" fill="#666" font-size="11">hashes by city, runs aggregators</text>
+  <line x1="240" y1="184" x2="240" y2="204" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrDown)"/>
+
+  <!-- OrderByOp -->
+  <rect x="140" y="208" width="200" height="42" rx="8" fill="#e4f5e7" stroke="#7ee787"/>
+  <text x="240" y="234" text-anchor="middle" fill="#1a1a1a" font-weight="600">OrderByOp</text>
+  <text x="360" y="234" fill="#666" font-size="11">sorts result by city ASC</text>
+  <line x1="240" y1="250" x2="240" y2="270" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrDown)"/>
+
+  <!-- Results -->
+  <rect x="170" y="274" width="140" height="38" rx="8" fill="#f3f4f6" stroke="#d1d5db"/>
+  <text x="240" y="298" text-anchor="middle" fill="#666" font-weight="600">results</text>
+</svg>
 
   <h2>Data Flow</h2>
   <p><strong>SQL path:</strong> Tokenize → Parse → Plan → exec.Operator tree → consumer drains via <code>Next()</code></p>
