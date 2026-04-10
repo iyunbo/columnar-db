@@ -13,6 +13,10 @@
       display: block;
       margin: 1.5rem auto;
     }
+    svg a g { transition: transform 0.15s, opacity 0.15s; cursor: pointer; }
+    svg a:hover g { opacity: 0.85; }
+    svg a g rect.box { transition: stroke-width 0.15s, filter 0.15s; }
+    svg a:hover g rect.box { stroke-width: 2.5; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.12)); }
   </style>
 </head>
 <body>
@@ -46,7 +50,9 @@
   <text x="400" y="58" text-anchor="middle" fill="#666" font-size="12">cmd/columnar-db — Interactive SQL shell + demo dataset</text>
 
   <!-- Layer 4: SQL Frontend -->
-  <rect x="20" y="100" width="760" height="90" rx="10" fill="#f5f0ff" stroke="#c4a8f0"/>
+  <a href="sql.html">
+  <g>
+  <rect class="box" x="20" y="100" width="760" height="90" rx="10" fill="#f5f0ff" stroke="#c4a8f0"/>
   <text x="400" y="128" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">SQL Frontend</text>
   <g fill="#444" font-size="12">
     <rect x="80" y="142" width="120" height="32" rx="6" fill="#ece4f9" stroke="#c4a8f0"/>
@@ -58,13 +64,17 @@
     <rect x="490" y="142" width="120" height="32" rx="6" fill="#ece4f9" stroke="#c4a8f0"/>
     <text x="550" y="163" text-anchor="middle">Execute</text>
   </g>
+  </g>
+  </a>
   <!-- flow arrows -->
   <line x1="200" y1="158" x2="230" y2="158" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
   <line x1="330" y1="158" x2="360" y2="158" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
   <line x1="460" y1="158" x2="490" y2="158" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
 
   <!-- Layer 3: Execution Engine -->
-  <rect x="20" y="210" width="760" height="90" rx="10" fill="#f0faf2" stroke="#7ee787"/>
+  <a href="execution.html">
+  <g>
+  <rect class="box" x="20" y="210" width="760" height="90" rx="10" fill="#f0faf2" stroke="#7ee787"/>
   <text x="400" y="238" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">Vectorized Execution</text>
   <g fill="#444" font-size="12">
     <rect x="50"  y="252" width="80"  height="32" rx="6" fill="#e4f5e7" stroke="#7ee787"/>
@@ -82,9 +92,13 @@
     <rect x="700" y="252" width="60"  height="32" rx="6" fill="#e4f5e7" stroke="#7ee787"/>
     <text x="730" y="273" text-anchor="middle">Limit</text>
   </g>
+  </g>
+  </a>
 
   <!-- Layer 2: Encoding -->
-  <rect x="20" y="320" width="760" height="80" rx="10" fill="#faf5ff" stroke="#d2a8ff"/>
+  <a href="encoding.html">
+  <g>
+  <rect class="box" x="20" y="320" width="760" height="80" rx="10" fill="#faf5ff" stroke="#d2a8ff"/>
   <text x="400" y="348" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">Encoding &amp; Compression</text>
   <g fill="#444" font-size="12">
     <rect x="100" y="360" width="80"  height="28" rx="6" fill="#f0e8fb" stroke="#d2a8ff"/>
@@ -98,9 +112,13 @@
     <rect x="560" y="360" width="80"  height="28" rx="6" fill="#f0e8fb" stroke="#d2a8ff"/>
     <text x="600" y="379" text-anchor="middle">LZ4</text>
   </g>
+  </g>
+  </a>
 
   <!-- Layer 1: Storage -->
-  <rect x="20" y="420" width="760" height="90" rx="10" fill="#fff8f0" stroke="#ffa657"/>
+  <a href="storage.html">
+  <g>
+  <rect class="box" x="20" y="420" width="760" height="90" rx="10" fill="#fff8f0" stroke="#ffa657"/>
   <text x="400" y="448" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">Column Storage</text>
   <g fill="#444" font-size="12">
     <rect x="80"  y="460" width="120" height="32" rx="6" fill="#fef0e0" stroke="#ffa657"/>
@@ -114,6 +132,8 @@
     <rect x="670" y="460" width="90"  height="32" rx="6" fill="#fef0e0" stroke="#ffa657"/>
     <text x="715" y="481" text-anchor="middle">Reader</text>
   </g>
+  </g>
+  </a>
 
   <!-- Inter-layer arrows -->
   <line x1="400" y1="80" x2="400" y2="100" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
@@ -134,26 +154,34 @@
   </defs>
 
   <!-- ScanOp -->
-  <rect x="100" y="10" width="260" height="50" rx="8" fill="#e4f5e7" stroke="#7ee787" stroke-width="1.5"/>
+  <a href="execution.html#operators"><g>
+  <rect class="box" x="100" y="10" width="260" height="50" rx="8" fill="#e4f5e7" stroke="#7ee787" stroke-width="1.5"/>
   <text x="230" y="41" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">ScanOp</text>
+  </g></a>
   <text x="385" y="41" fill="#666" font-size="13">reads RowGroup, yields Batches</text>
   <line x1="230" y1="60" x2="230" y2="82" stroke="#2563eb" stroke-width="2" marker-end="url(#arrDown)"/>
 
   <!-- FilterOp -->
-  <rect x="100" y="88" width="260" height="50" rx="8" fill="#e4f5e7" stroke="#7ee787" stroke-width="1.5"/>
+  <a href="execution.html#operators"><g>
+  <rect class="box" x="100" y="88" width="260" height="50" rx="8" fill="#e4f5e7" stroke="#7ee787" stroke-width="1.5"/>
   <text x="230" y="119" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">FilterOp</text>
+  </g></a>
   <text x="385" y="119" fill="#666" font-size="13">narrows selection (age &gt; 30)</text>
   <line x1="230" y1="138" x2="230" y2="160" stroke="#2563eb" stroke-width="2" marker-end="url(#arrDown)"/>
 
   <!-- GroupByOp -->
-  <rect x="100" y="166" width="260" height="50" rx="8" fill="#e4f5e7" stroke="#7ee787" stroke-width="1.5"/>
+  <a href="execution.html#operators"><g>
+  <rect class="box" x="100" y="166" width="260" height="50" rx="8" fill="#e4f5e7" stroke="#7ee787" stroke-width="1.5"/>
   <text x="230" y="197" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">GroupByOp</text>
+  </g></a>
   <text x="385" y="197" fill="#666" font-size="13">hashes by city, runs aggregators</text>
   <line x1="230" y1="216" x2="230" y2="238" stroke="#2563eb" stroke-width="2" marker-end="url(#arrDown)"/>
 
   <!-- OrderByOp -->
-  <rect x="100" y="244" width="260" height="50" rx="8" fill="#e4f5e7" stroke="#7ee787" stroke-width="1.5"/>
+  <a href="execution.html#operators"><g>
+  <rect class="box" x="100" y="244" width="260" height="50" rx="8" fill="#e4f5e7" stroke="#7ee787" stroke-width="1.5"/>
   <text x="230" y="275" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">OrderByOp</text>
+  </g></a>
   <text x="385" y="275" fill="#666" font-size="13">sorts result by city ASC</text>
   <line x1="230" y1="294" x2="230" y2="316" stroke="#2563eb" stroke-width="2" marker-end="url(#arrDown)"/>
 
@@ -182,37 +210,55 @@
 
   <!-- SQL path -->
   <text x="10" y="30" fill="#1a1a1a" font-weight="700" font-size="14">SQL path</text>
-  <rect x="10"  y="42" width="100" height="34" rx="6" fill="#f5f0ff" stroke="#c4a8f0"/>
+  <a href="sql.html"><g>
+  <rect class="box" x="10"  y="42" width="100" height="34" rx="6" fill="#f5f0ff" stroke="#c4a8f0"/>
   <text x="60"  y="64" text-anchor="middle" fill="#444">Tokenize</text>
+  </g></a>
   <line x1="110" y1="59" x2="130" y2="59" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrRight)"/>
-  <rect x="135" y="42" width="80"  height="34" rx="6" fill="#f5f0ff" stroke="#c4a8f0"/>
+  <a href="sql.html"><g>
+  <rect class="box" x="135" y="42" width="80"  height="34" rx="6" fill="#f5f0ff" stroke="#c4a8f0"/>
   <text x="175" y="64" text-anchor="middle" fill="#444">Parse</text>
+  </g></a>
   <line x1="215" y1="59" x2="235" y2="59" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrRight)"/>
-  <rect x="240" y="42" width="70"  height="34" rx="6" fill="#f5f0ff" stroke="#c4a8f0"/>
+  <a href="sql.html"><g>
+  <rect class="box" x="240" y="42" width="70"  height="34" rx="6" fill="#f5f0ff" stroke="#c4a8f0"/>
   <text x="275" y="64" text-anchor="middle" fill="#444">Plan</text>
+  </g></a>
   <line x1="310" y1="59" x2="330" y2="59" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrRight)"/>
-  <rect x="335" y="42" width="140" height="34" rx="6" fill="#e4f5e7" stroke="#7ee787"/>
+  <a href="execution.html"><g>
+  <rect class="box" x="335" y="42" width="140" height="34" rx="6" fill="#e4f5e7" stroke="#7ee787"/>
   <text x="405" y="64" text-anchor="middle" fill="#444">Operator tree</text>
+  </g></a>
   <line x1="475" y1="59" x2="495" y2="59" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrRight)"/>
   <rect x="500" y="42" width="130" height="34" rx="6" fill="#f3f4f6" stroke="#d1d5db"/>
   <text x="565" y="64" text-anchor="middle" fill="#444">drain Next()</text>
 
   <!-- Write path -->
   <text x="10" y="130" fill="#1a1a1a" font-weight="700" font-size="14">Write path</text>
-  <rect x="10"  y="142" width="120" height="34" rx="6" fill="#fff8f0" stroke="#ffa657"/>
+  <a href="storage.html"><g>
+  <rect class="box" x="10"  y="142" width="120" height="34" rx="6" fill="#fff8f0" stroke="#ffa657"/>
   <text x="70"  y="164" text-anchor="middle" fill="#444">Columns</text>
+  </g></a>
   <line x1="130" y1="159" x2="150" y2="159" stroke="#ea8c2a" stroke-width="1.5" marker-end="url(#arrRightOrange)"/>
-  <rect x="155" y="142" width="130" height="34" rx="6" fill="#fff8f0" stroke="#ffa657"/>
+  <a href="storage.html"><g>
+  <rect class="box" x="155" y="142" width="130" height="34" rx="6" fill="#fff8f0" stroke="#ffa657"/>
   <text x="220" y="164" text-anchor="middle" fill="#444">ColumnChunks</text>
+  </g></a>
   <line x1="285" y1="159" x2="305" y2="159" stroke="#ea8c2a" stroke-width="1.5" marker-end="url(#arrRightOrange)"/>
-  <rect x="310" y="142" width="110" height="34" rx="6" fill="#fff8f0" stroke="#ffa657"/>
+  <a href="storage.html"><g>
+  <rect class="box" x="310" y="142" width="110" height="34" rx="6" fill="#fff8f0" stroke="#ffa657"/>
   <text x="365" y="164" text-anchor="middle" fill="#444">RowGroup</text>
+  </g></a>
   <line x1="420" y1="159" x2="440" y2="159" stroke="#ea8c2a" stroke-width="1.5" marker-end="url(#arrRightOrange)"/>
-  <rect x="445" y="142" width="100" height="34" rx="6" fill="#f5f0ff" stroke="#d2a8ff"/>
+  <a href="encoding.html"><g>
+  <rect class="box" x="445" y="142" width="100" height="34" rx="6" fill="#f5f0ff" stroke="#d2a8ff"/>
   <text x="495" y="164" text-anchor="middle" fill="#444">Encoder</text>
+  </g></a>
   <line x1="545" y1="159" x2="565" y2="159" stroke="#ea8c2a" stroke-width="1.5" marker-end="url(#arrRightOrange)"/>
-  <rect x="570" y="142" width="60"  height="34" rx="6" fill="#f5f0ff" stroke="#d2a8ff"/>
+  <a href="encoding.html"><g>
+  <rect class="box" x="570" y="142" width="60"  height="34" rx="6" fill="#f5f0ff" stroke="#d2a8ff"/>
   <text x="600" y="164" text-anchor="middle" fill="#444">LZ4</text>
+  </g></a>
   <line x1="630" y1="159" x2="650" y2="159" stroke="#ea8c2a" stroke-width="1.5" marker-end="url(#arrRightOrange)"/>
   <rect x="655" y="142" width="55"  height="34" rx="6" fill="#f3f4f6" stroke="#d1d5db"/>
   <text x="682" y="164" text-anchor="middle" fill="#444">disk</text>
@@ -222,17 +268,25 @@
   <rect x="10"  y="242" width="110" height="34" rx="6" fill="#f3f4f6" stroke="#d1d5db"/>
   <text x="65"  y="264" text-anchor="middle" fill="#444">open file</text>
   <line x1="120" y1="259" x2="140" y2="259" stroke="#0d9488" stroke-width="1.5" marker-end="url(#arrRightTeal)"/>
-  <rect x="145" y="242" width="120" height="34" rx="6" fill="#f3f4f6" stroke="#d1d5db"/>
+  <a href="storage.html"><g>
+  <rect class="box" x="145" y="242" width="120" height="34" rx="6" fill="#f3f4f6" stroke="#d1d5db"/>
   <text x="205" y="264" text-anchor="middle" fill="#444">read footer</text>
+  </g></a>
   <line x1="265" y1="259" x2="285" y2="259" stroke="#0d9488" stroke-width="1.5" marker-end="url(#arrRightTeal)"/>
-  <rect x="290" y="242" width="130" height="34" rx="6" fill="#f5f0ff" stroke="#d2a8ff"/>
+  <a href="encoding.html"><g>
+  <rect class="box" x="290" y="242" width="130" height="34" rx="6" fill="#f5f0ff" stroke="#d2a8ff"/>
   <text x="355" y="264" text-anchor="middle" fill="#444">decompress</text>
+  </g></a>
   <line x1="420" y1="259" x2="440" y2="259" stroke="#0d9488" stroke-width="1.5" marker-end="url(#arrRightTeal)"/>
-  <rect x="445" y="242" width="100" height="34" rx="6" fill="#f5f0ff" stroke="#d2a8ff"/>
+  <a href="encoding.html"><g>
+  <rect class="box" x="445" y="242" width="100" height="34" rx="6" fill="#f5f0ff" stroke="#d2a8ff"/>
   <text x="495" y="264" text-anchor="middle" fill="#444">decode</text>
+  </g></a>
   <line x1="545" y1="259" x2="565" y2="259" stroke="#0d9488" stroke-width="1.5" marker-end="url(#arrRightTeal)"/>
-  <rect x="570" y="242" width="120" height="34" rx="6" fill="#fff8f0" stroke="#ffa657"/>
+  <a href="storage.html"><g>
+  <rect class="box" x="570" y="242" width="120" height="34" rx="6" fill="#fff8f0" stroke="#ffa657"/>
   <text x="630" y="264" text-anchor="middle" fill="#444">RowGroup</text>
+  </g></a>
 </svg>
 
   <h2>Component Details</h2>

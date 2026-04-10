@@ -36,7 +36,7 @@
 // After  filter (age > 30): selection = [1, 3, 5]
 // Vectors unchanged — only the index list shrinks</code></pre>
 
-  <h2>Operators</h2>
+  <h2 id="operators">Operators</h2>
   <p>All operators implement the pull-based <code>Operator</code> interface:</p>
 <pre><code>type Operator interface {
     Next() (*Batch, bool)
