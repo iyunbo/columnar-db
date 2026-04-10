@@ -1,641 +1,170 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>columnar-db — Architecture</title>
-<style>
-  :root {
-    --bg: #0d1117;
-    --panel: #161b22;
-    --panel-2: #1c2430;
-    --border: #30363d;
-    --text: #c9d1d9;
-    --muted: #8b949e;
-    --accent: #58a6ff;
-    --exec: #7ee787;
-    --storage: #ffa657;
-    --encoding: #d2a8ff;
-    --disk: #79c0ff;
-    --iface: #f0883e;
-  }
-  html, body {
-    margin: 0;
-    padding: 0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
-    font-size: 14px;
-    line-height: 1.55;
-  }
-  .page {
-    max-width: 1180px;
-    margin: 0 auto;
-    padding: 40px 32px 80px;
-  }
-  h1 {
-    font-size: 28px;
-    margin: 0 0 8px;
-  }
-  h2 {
-    font-size: 20px;
-    margin: 40px 0 12px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--border);
-  }
-  .subtitle {
-    color: var(--muted);
-    margin: 0 0 24px;
-  }
-  code, .mono {
-    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-    font-size: 13px;
-  }
-  .legend {
-    display: flex;
-    gap: 18px;
-    flex-wrap: wrap;
-    margin: 18px 0 12px;
-    font-size: 13px;
-    color: var(--muted);
-  }
-  .legend .swatch {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border-radius: 2px;
-    margin-right: 6px;
-    vertical-align: middle;
-  }
-  svg {
-    width: 100%;
-    height: auto;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    display: block;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 8px;
-  }
-  th, td {
-    text-align: left;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
-  th {
-    color: var(--muted);
-    font-weight: 600;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  td code {
-    background: var(--panel-2);
-    padding: 1px 6px;
-    border-radius: 3px;
-    font-size: 12px;
-  }
-  td.pkg-exec    { border-left: 3px solid var(--exec); }
-  td.pkg-storage { border-left: 3px solid var(--storage); }
-  td.pkg-encoding{ border-left: 3px solid var(--encoding); }
-  td.pkg-disk    { border-left: 3px solid var(--disk); }
-  .flow {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px 20px;
-    margin-top: 10px;
-    font-size: 13px;
-  }
-  .flow ol { margin: 6px 0; padding-left: 20px; }
-  .flow li { margin: 4px 0; }
-  .arrow { color: var(--accent); }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Architecture — Columnar DB</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    svg {
+      width: 100%;
+      max-width: 800px;
+      height: auto;
+      display: block;
+      margin: 1.5rem auto;
+    }
+  </style>
 </head>
 <body>
-<div class="page">
+<div class="container" style="max-width: 860px;">
+  <nav>
+    <a href="index.html" class="brand">Columnar DB</a>
+    <a href="index.html">Overview</a>
+    <a href="architecture.html" class="active">Architecture</a>
+    <a href="storage.html">Storage</a>
+    <a href="encoding.html">Encoding</a>
+    <a href="execution.html">Execution</a>
+    <a href="sql.html">SQL</a>
+    <a href="https://github.com/iyunbo/columnar-db">GitHub</a>
+  </nav>
 
-  <h1>columnar-db — Architecture</h1>
-  <p class="subtitle">
-    Final snapshot. 5 packages + CLI REPL.
-    <code>sql/</code>: full SQL frontend (SELECT/WHERE/GROUP BY/
-    ORDER BY/LIMIT + 5 aggregates).
-    <code>exec/</code>: 7 operators (Scan, Filter, Project,
-    Aggregate, GroupBy, OrderBy, Limit) + 9 aggregators + 7
-    predicates. <code>cmd/columnar-db</code>: interactive REPL
-    with demo dataset. 474 tests, ~19K lines Go.
-  </p>
+  <h1>Architecture</h1>
+  <p class="subtitle">Five layers, bottom to top. Each layer only depends on the one below it.</p>
 
-  <h2>Layered View</h2>
-
-  <div class="legend">
-    <span><span class="swatch" style="background:var(--exec)"></span>exec (execution engine)</span>
-    <span><span class="swatch" style="background:var(--storage)"></span>storage (in-memory columnar types)</span>
-    <span><span class="swatch" style="background:var(--encoding)"></span>encoding (compression &amp; encodings)</span>
-    <span><span class="swatch" style="background:var(--disk)"></span>persistence (file I/O)</span>
-    <span><span class="swatch" style="background:#d2a8ff"></span>sql (SQL frontend + REPL)</span>
-    <span><span class="swatch" style="background:var(--iface);opacity:0.7"></span>interface / abstract type</span>
-  </div>
-
-<svg viewBox="0 -120 1200 1170" xmlns="http://www.w3.org/2000/svg" font-family="JetBrains Mono, SF Mono, Menlo, monospace" font-size="13">
+<svg viewBox="0 0 800 520" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13">
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
             markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/>
-    </marker>
-    <marker id="arrowDim" viewBox="0 0 10 10" refX="9" refY="5"
-            markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e"/>
-    </marker>
-    <marker id="implArrow" viewBox="0 0 12 12" refX="11" refY="6"
-            markerWidth="10" markerHeight="10" orient="auto-start-reverse">
-      <path d="M 0 0 L 12 6 L 0 12 z" fill="none" stroke="#f0883e" stroke-width="1.5"/>
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
     </marker>
   </defs>
 
-  <!-- ============================== -->
-  <!-- LAYER 0: SQL FRONTEND + REPL   -->
-  <!-- ============================== -->
-  <rect x="20" y="-110" width="1160" height="110" rx="10"
-        fill="#141024" stroke="#d2a8ff" stroke-opacity="0.35"/>
-  <text x="38" y="-82" fill="#d2a8ff" font-weight="700" font-size="14">sql/ — SQL FRONTEND + cmd/columnar-db REPL</text>
-  <text x="38" y="-64" fill="#8b949e" font-size="12">Tokenize → Parse → Plan → Execute(rg, query) → exec.Operator</text>
+  <!-- Layer 5: REPL -->
+  <rect x="20" y="10" width="760" height="70" rx="10" fill="#f0f4ff" stroke="#93b4f5"/>
+  <text x="400" y="38" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">REPL</text>
+  <text x="400" y="58" text-anchor="middle" fill="#666" font-size="12">cmd/columnar-db — Interactive SQL shell + demo dataset</text>
 
-  <!-- Lexer -->
-  <g>
-    <rect x="60" y="-52" width="130" height="40" rx="6" fill="#1c142a" stroke="#d2a8ff"/>
-    <text x="125" y="-26" text-anchor="middle" fill="#d2a8ff" font-weight="700">Tokenize</text>
+  <!-- Layer 4: SQL Frontend -->
+  <rect x="20" y="100" width="760" height="90" rx="10" fill="#f5f0ff" stroke="#c4a8f0"/>
+  <text x="400" y="128" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">SQL Frontend</text>
+  <g fill="#444" font-size="12">
+    <rect x="80" y="142" width="120" height="32" rx="6" fill="#ece4f9" stroke="#c4a8f0"/>
+    <text x="140" y="163" text-anchor="middle">Tokenize</text>
+    <rect x="230" y="142" width="100" height="32" rx="6" fill="#ece4f9" stroke="#c4a8f0"/>
+    <text x="280" y="163" text-anchor="middle">Parse</text>
+    <rect x="360" y="142" width="100" height="32" rx="6" fill="#ece4f9" stroke="#c4a8f0"/>
+    <text x="410" y="163" text-anchor="middle">Plan</text>
+    <rect x="490" y="142" width="120" height="32" rx="6" fill="#ece4f9" stroke="#c4a8f0"/>
+    <text x="550" y="163" text-anchor="middle">Execute</text>
+  </g>
+  <!-- flow arrows -->
+  <line x1="200" y1="158" x2="230" y2="158" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="330" y1="158" x2="360" y2="158" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="460" y1="158" x2="490" y2="158" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Layer 3: Execution Engine -->
+  <rect x="20" y="210" width="760" height="90" rx="10" fill="#f0faf2" stroke="#7ee787"/>
+  <text x="400" y="238" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">Vectorized Execution</text>
+  <g fill="#444" font-size="12">
+    <rect x="50"  y="252" width="80"  height="32" rx="6" fill="#e4f5e7" stroke="#7ee787"/>
+    <text x="90"  y="273" text-anchor="middle">Scan</text>
+    <rect x="150" y="252" width="80"  height="32" rx="6" fill="#e4f5e7" stroke="#7ee787"/>
+    <text x="190" y="273" text-anchor="middle">Filter</text>
+    <rect x="250" y="252" width="80"  height="32" rx="6" fill="#e4f5e7" stroke="#7ee787"/>
+    <text x="290" y="273" text-anchor="middle">Project</text>
+    <rect x="350" y="252" width="100" height="32" rx="6" fill="#e4f5e7" stroke="#7ee787"/>
+    <text x="400" y="273" text-anchor="middle">Aggregate</text>
+    <rect x="470" y="252" width="100" height="32" rx="6" fill="#e4f5e7" stroke="#7ee787"/>
+    <text x="520" y="273" text-anchor="middle">GroupBy</text>
+    <rect x="590" y="252" width="90"  height="32" rx="6" fill="#e4f5e7" stroke="#7ee787"/>
+    <text x="635" y="273" text-anchor="middle">OrderBy</text>
+    <rect x="700" y="252" width="60"  height="32" rx="6" fill="#e4f5e7" stroke="#7ee787"/>
+    <text x="730" y="273" text-anchor="middle">Limit</text>
   </g>
 
-  <!-- Parser -->
-  <g>
-    <rect x="210" y="-52" width="110" height="40" rx="6" fill="#1c142a" stroke="#d2a8ff"/>
-    <text x="265" y="-26" text-anchor="middle" fill="#d2a8ff" font-weight="700">Parse</text>
+  <!-- Layer 2: Encoding -->
+  <rect x="20" y="320" width="760" height="80" rx="10" fill="#faf5ff" stroke="#d2a8ff"/>
+  <text x="400" y="348" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">Encoding &amp; Compression</text>
+  <g fill="#444" font-size="12">
+    <rect x="100" y="360" width="80"  height="28" rx="6" fill="#f0e8fb" stroke="#d2a8ff"/>
+    <text x="140" y="379" text-anchor="middle">Plain</text>
+    <rect x="210" y="360" width="80"  height="28" rx="6" fill="#f0e8fb" stroke="#d2a8ff"/>
+    <text x="250" y="379" text-anchor="middle">RLE</text>
+    <rect x="320" y="360" width="100" height="28" rx="6" fill="#f0e8fb" stroke="#d2a8ff"/>
+    <text x="370" y="379" text-anchor="middle">Dictionary</text>
+    <rect x="450" y="360" width="80"  height="28" rx="6" fill="#f0e8fb" stroke="#d2a8ff"/>
+    <text x="490" y="379" text-anchor="middle">Delta</text>
+    <rect x="560" y="360" width="80"  height="28" rx="6" fill="#f0e8fb" stroke="#d2a8ff"/>
+    <text x="600" y="379" text-anchor="middle">LZ4</text>
   </g>
 
-  <!-- Planner -->
-  <g>
-    <rect x="340" y="-52" width="110" height="40" rx="6" fill="#1c142a" stroke="#d2a8ff"/>
-    <text x="395" y="-26" text-anchor="middle" fill="#d2a8ff" font-weight="700">Plan</text>
+  <!-- Layer 1: Storage -->
+  <rect x="20" y="420" width="760" height="90" rx="10" fill="#fff8f0" stroke="#ffa657"/>
+  <text x="400" y="448" text-anchor="middle" fill="#1a1a1a" font-weight="700" font-size="15">Column Storage</text>
+  <g fill="#444" font-size="12">
+    <rect x="80"  y="460" width="120" height="32" rx="6" fill="#fef0e0" stroke="#ffa657"/>
+    <text x="140" y="481" text-anchor="middle">RowGroup</text>
+    <rect x="230" y="460" width="140" height="32" rx="6" fill="#fef0e0" stroke="#ffa657"/>
+    <text x="300" y="481" text-anchor="middle">ColumnChunk</text>
+    <rect x="400" y="460" width="120" height="32" rx="6" fill="#fef0e0" stroke="#ffa657"/>
+    <text x="460" y="481" text-anchor="middle">NullBitmap</text>
+    <rect x="550" y="460" width="100" height="32" rx="6" fill="#fef0e0" stroke="#ffa657"/>
+    <text x="600" y="481" text-anchor="middle">Writer</text>
+    <rect x="670" y="460" width="90"  height="32" rx="6" fill="#fef0e0" stroke="#ffa657"/>
+    <text x="715" y="481" text-anchor="middle">Reader</text>
   </g>
 
-  <!-- Execute -->
-  <g>
-    <rect x="470" y="-52" width="120" height="40" rx="6" fill="#1c142a" stroke="#d2a8ff"/>
-    <text x="530" y="-26" text-anchor="middle" fill="#d2a8ff" font-weight="700">Execute</text>
-  </g>
-
-  <!-- REPL -->
-  <g>
-    <rect x="750" y="-52" width="390" height="40" rx="6" fill="#1c142a" stroke="#d2a8ff"/>
-    <text x="945" y="-26" text-anchor="middle" fill="#d2a8ff" font-weight="700">cmd/columnar-db — Interactive REPL</text>
-  </g>
-
-  <!-- sql/ flow arrows -->
-  <line x1="190" y1="-32" x2="210" y2="-32" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="320" y1="-32" x2="340" y2="-32" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="450" y1="-32" x2="470" y2="-32" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-
-  <!-- sql → exec (Plan produces Operator tree) -->
-  <path d="M 395 -12 Q 395 5 200 20" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="340" y="12" fill="#58a6ff" font-size="12">produces exec.Operator tree</text>
-
-  <!-- ============================== -->
-  <!-- LAYER 1: EXECUTION             -->
-  <!-- ============================== -->
-  <rect x="20" y="20" width="1160" height="380" rx="10"
-        fill="#0f1b12" stroke="#7ee787" stroke-opacity="0.35"/>
-  <text x="38" y="48" fill="#7ee787" font-weight="700" font-size="14">exec/ — VECTORIZED EXECUTION ENGINE</text>
-  <text x="38" y="66" fill="#8b949e" font-size="12">process ~1024 values per batch in tight typed loops; zero allocs in hot path</text>
-  <text x="38" y="82" fill="#8b949e" font-size="11" font-style="italic">pipeline: ScanOp → FilterOp → [ProjectOp] → [AggregateOp | GroupByOp] → [OrderByOp] → [LimitOp] → consumer</text>
-
-  <!-- ScanOp -->
-  <g>
-    <rect x="60" y="90" width="240" height="110" rx="6" fill="#162418" stroke="#7ee787"/>
-    <text x="180" y="115" text-anchor="middle" fill="#7ee787" font-weight="700">ScanOp</text>
-    <line x1="72" y1="124" x2="288" y2="124" stroke="#30363d"/>
-    <text x="72" y="148" fill="#c9d1d9">+ Next() (*Batch, bool)</text>
-    <text x="72" y="170" fill="#c9d1d9">+ Reset()</text>
-  </g>
-
-  <!-- Batch -->
-  <g>
-    <rect x="420" y="90" width="240" height="110" rx="6" fill="#162418" stroke="#7ee787"/>
-    <text x="540" y="115" text-anchor="middle" fill="#7ee787" font-weight="700">Batch</text>
-    <line x1="432" y1="124" x2="648" y2="124" stroke="#30363d"/>
-    <text x="432" y="148" fill="#c9d1d9">Vectors []*Vector</text>
-    <text x="432" y="168" fill="#c9d1d9">Sel     *Selection</text>
-    <text x="432" y="188" fill="#c9d1d9">+ Len() / NumColumns()</text>
-  </g>
-
-  <!-- Vector -->
-  <g>
-    <rect x="800" y="90" width="340" height="110" rx="6" fill="#162418" stroke="#7ee787"/>
-    <text x="970" y="115" text-anchor="middle" fill="#7ee787" font-weight="700">Vector</text>
-    <line x1="812" y1="124" x2="1128" y2="124" stroke="#30363d"/>
-    <text x="812" y="148" fill="#c9d1d9">Type / Values (Column) / Nulls</text>
-    <text x="812" y="170" fill="#c9d1d9">+ Int64s() / Float64s() / ...</text>
-  </g>
-
-  <!-- exec edges: ScanOp produces Batch, Batch contains Vectors -->
-  <line x1="300" y1="145" x2="420" y2="145" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="360" y="138" text-anchor="middle" fill="#58a6ff" font-size="12">produces</text>
-  <line x1="660" y1="145" x2="800" y2="145" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="730" y="138" text-anchor="middle" fill="#58a6ff" font-size="12">holds N of</text>
-
-  <!-- Selection (row 2 left) -->
-  <g>
-    <rect x="60" y="220" width="460" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
-    <text x="290" y="245" text-anchor="middle" fill="#7ee787" font-weight="700">Selection</text>
-    <line x1="72" y1="254" x2="508" y2="254" stroke="#30363d"/>
-    <text x="72" y="272" fill="#c9d1d9">indices []uint16</text>
-    <text x="72" y="285" fill="#c9d1d9" font-size="12">+ NewFullSelection / Add / Indices / Reset / CopyFrom</text>
-  </g>
-
-  <!-- FilterOp (row 2 middle) -->
-  <g>
-    <rect x="550" y="220" width="240" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
-    <text x="670" y="245" text-anchor="middle" fill="#7ee787" font-weight="700">FilterOp</text>
-    <line x1="562" y1="254" x2="778" y2="254" stroke="#30363d"/>
-    <text x="562" y="272" fill="#c9d1d9">+ Next() (*Batch, bool)</text>
-    <text x="562" y="286" fill="#c9d1d9" font-size="12">narrows Batch.Sel via Predicate</text>
-  </g>
-
-  <!-- Predicate interface (row 2 right) -->
-  <g>
-    <rect x="820" y="220" width="320" height="70" rx="6"
-          fill="#162418" stroke="#f0883e" stroke-dasharray="4 3"/>
-    <text x="980" y="245" text-anchor="middle" fill="#f0883e" font-weight="700" font-style="italic">«interface» Predicate</text>
-    <line x1="832" y1="254" x2="1128" y2="254" stroke="#30363d"/>
-    <text x="832" y="272" fill="#c9d1d9">Eval(vec, in, out *Selection)</text>
-    <text x="832" y="286" fill="#c9d1d9" font-size="12">Int64 Eq / Ne / Lt / Le / Gt / Ge</text>
-  </g>
-
-  <!-- Selection ↔ FilterOp relation (narrows) -->
-  <line x1="520" y1="255" x2="550" y2="255" stroke="#58a6ff" stroke-width="2" marker-start="url(#arrow)"/>
-  <text x="535" y="248" text-anchor="middle" fill="#58a6ff" font-size="12">narrows</text>
-
-  <!-- FilterOp → Predicate (uses) -->
-  <line x1="790" y1="255" x2="820" y2="255" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="805" y="248" text-anchor="middle" fill="#58a6ff" font-size="12">uses</text>
-
-  <!-- ScanOp → FilterOp (wraps as child) -->
-  <path d="M 180 200 Q 200 215 450 220" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="240" y="234" fill="#58a6ff" font-size="12">wraps via Operator iface</text>
-
-  <!-- ProjectOp (row 3 left) -->
-  <g>
-    <rect x="60" y="310" width="460" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
-    <text x="290" y="335" text-anchor="middle" fill="#7ee787" font-weight="700">ProjectOp</text>
-    <line x1="72" y1="344" x2="508" y2="344" stroke="#30363d"/>
-    <text x="72" y="362" fill="#c9d1d9">+ Next() (*Batch, bool)</text>
-    <text x="72" y="376" fill="#c9d1d9" font-size="12">drops / reorders columns — Sel unchanged, Vectors pointer-aliased</text>
-  </g>
-
-  <!-- AggregateOp (Phase 4 Step 3) -->
-  <g>
-    <rect x="550" y="310" width="150" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
-    <text x="625" y="335" text-anchor="middle" fill="#7ee787" font-weight="700">AggregateOp</text>
-    <line x1="562" y1="344" x2="688" y2="344" stroke="#30363d"/>
-    <text x="562" y="362" fill="#c9d1d9" font-size="11">scalar (no GROUP BY)</text>
-    <text x="562" y="376" fill="#c9d1d9" font-size="11">→ 1-row Batch</text>
-  </g>
-
-  <!-- GroupByOp (Phase 4 Step 4) -->
-  <g>
-    <rect x="710" y="310" width="140" height="70" rx="6" fill="#162418" stroke="#7ee787"/>
-    <text x="780" y="335" text-anchor="middle" fill="#7ee787" font-weight="700">GroupByOp</text>
-    <line x1="722" y1="344" x2="838" y2="344" stroke="#30363d"/>
-    <text x="722" y="362" fill="#c9d1d9" font-size="11">hash GROUP BY</text>
-    <text x="722" y="376" fill="#c9d1d9" font-size="11">1..N keys (int64|str)</text>
-  </g>
-
-  <!-- Aggregator interface (row 3 right) -->
-  <g>
-    <rect x="860" y="310" width="280" height="70" rx="6"
-          fill="#162418" stroke="#f0883e" stroke-dasharray="4 3"/>
-    <text x="1000" y="335" text-anchor="middle" fill="#f0883e" font-weight="700" font-style="italic">«interface» Aggregator</text>
-    <line x1="872" y1="344" x2="1128" y2="344" stroke="#30363d"/>
-    <text x="872" y="362" fill="#c9d1d9" font-size="12">Init / Grow / Update(vec, sel, gids) / Finalize</text>
-    <text x="872" y="376" fill="#c9d1d9" font-size="12">Count/Sum/Min/Max/Avg (int64 + float64)</text>
-  </g>
-
-  <!-- AggregateOp + GroupByOp → Aggregator (both use) -->
-  <line x1="850" y1="345" x2="860" y2="345" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="855" y="395" text-anchor="middle" fill="#58a6ff" font-size="11">AggregateOp &amp; GroupByOp use Aggregator</text>
-
-  <!-- FilterOp → ProjectOp (wraps as child) -->
-  <path d="M 670 290 Q 650 300 500 310" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="560" y="306" fill="#58a6ff" font-size="12">wraps</text>
-
-  <!-- ============================== -->
-  <!-- LAYER 2: STORAGE (in-memory)   -->
-  <!-- ============================== -->
-  <rect x="20" y="430" width="1160" height="340" rx="10"
-        fill="#1c1610" stroke="#ffa657" stroke-opacity="0.35"/>
-  <text x="38" y="458" fill="#ffa657" font-weight="700" font-size="14">storage/ — IN-MEMORY COLUMNAR TYPES</text>
-  <text x="38" y="476" fill="#8b949e" font-size="12">typed contiguous arrays + null bitmaps + row-group containers</text>
-
-  <!-- RowGroup -->
-  <g>
-    <rect x="60" y="500" width="260" height="100" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="190" y="525" text-anchor="middle" fill="#ffa657" font-weight="700">RowGroup</text>
-    <line x1="72" y1="534" x2="308" y2="534" stroke="#30363d"/>
-    <text x="72" y="558" fill="#c9d1d9">Columns []*ColumnChunk</text>
-    <text x="72" y="580" fill="#c9d1d9">RowCount int</text>
-  </g>
-
-  <!-- ColumnChunk -->
-  <g>
-    <rect x="420" y="500" width="260" height="140" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="550" y="525" text-anchor="middle" fill="#ffa657" font-weight="700">ColumnChunk</text>
-    <line x1="432" y1="534" x2="668" y2="534" stroke="#30363d"/>
-    <text x="432" y="556" fill="#c9d1d9">Name string</text>
-    <text x="432" y="576" fill="#c9d1d9">ColType ColumnType</text>
-    <text x="432" y="596" fill="#c9d1d9">Values Column</text>
-    <text x="432" y="616" fill="#c9d1d9">Nulls *NullBitmap</text>
-  </g>
-
-  <!-- Column interface -->
-  <g>
-    <rect x="800" y="500" width="340" height="100" rx="6"
-          fill="#241a10" stroke="#f0883e" stroke-dasharray="4 3"/>
-    <text x="970" y="525" text-anchor="middle" fill="#f0883e" font-weight="700" font-style="italic">«interface» Column</text>
-    <line x1="812" y1="534" x2="1128" y2="534" stroke="#30363d"/>
-    <text x="812" y="558" fill="#c9d1d9">Type() ColumnType</text>
-    <text x="812" y="580" fill="#c9d1d9">Len() int</text>
-  </g>
-
-  <!-- Typed columns -->
-  <g>
-    <rect x="800" y="640" width="78" height="90" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="839" y="670" text-anchor="middle" fill="#ffa657" font-weight="700">Int64</text>
-    <text x="839" y="688" text-anchor="middle" fill="#ffa657" font-weight="700">Column</text>
-    <text x="839" y="714" text-anchor="middle" fill="#c9d1d9">[]int64</text>
-
-    <rect x="888" y="640" width="86" height="90" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="931" y="670" text-anchor="middle" fill="#ffa657" font-weight="700">Float64</text>
-    <text x="931" y="688" text-anchor="middle" fill="#ffa657" font-weight="700">Column</text>
-    <text x="931" y="714" text-anchor="middle" fill="#c9d1d9">[]float64</text>
-
-    <rect x="984" y="640" width="78" height="90" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="1023" y="670" text-anchor="middle" fill="#ffa657" font-weight="700">String</text>
-    <text x="1023" y="688" text-anchor="middle" fill="#ffa657" font-weight="700">Column</text>
-    <text x="1023" y="714" text-anchor="middle" fill="#c9d1d9">[]string</text>
-
-    <rect x="1072" y="640" width="68" height="90" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="1106" y="670" text-anchor="middle" fill="#ffa657" font-weight="700">Bool</text>
-    <text x="1106" y="688" text-anchor="middle" fill="#ffa657" font-weight="700">Column</text>
-    <text x="1106" y="714" text-anchor="middle" fill="#c9d1d9">[]bool</text>
-  </g>
-
-  <!-- NullBitmap -->
-  <g>
-    <rect x="60" y="640" width="260" height="110" rx="6" fill="#241a10" stroke="#ffa657"/>
-    <text x="190" y="664" text-anchor="middle" fill="#ffa657" font-weight="700">NullBitmap</text>
-    <line x1="72" y1="674" x2="308" y2="674" stroke="#30363d"/>
-    <text x="72" y="698" fill="#c9d1d9">data []byte (bit-packed)</text>
-    <text x="72" y="720" fill="#c9d1d9">+ SetNull / IsNull / Reset</text>
-  </g>
-
-  <!-- storage edges -->
-  <!-- RowGroup contains ColumnChunk -->
-  <line x1="320" y1="550" x2="420" y2="550" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="370" y="542" text-anchor="middle" fill="#58a6ff" font-size="12">contains</text>
-
-  <!-- ColumnChunk → Column (field) -->
-  <line x1="680" y1="580" x2="800" y2="570" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="740" y="565" text-anchor="middle" fill="#58a6ff" font-size="12">Values</text>
-
-  <!-- ColumnChunk → NullBitmap (curve) -->
-  <path d="M 420 610 Q 310 625 320 665" fill="none" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="345" y="618" text-anchor="middle" fill="#58a6ff" font-size="12">Nulls</text>
-
-  <!-- Column interface implemented by typed columns -->
-  <line x1="839" y1="640" x2="860" y2="600" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#implArrow)"/>
-  <line x1="931" y1="640" x2="935" y2="600" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#implArrow)"/>
-  <line x1="1023" y1="640" x2="1015" y2="600" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#implArrow)"/>
-  <line x1="1106" y1="640" x2="1090" y2="600" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#implArrow)"/>
-  <text x="1150" y="622" fill="#f0883e" font-size="12" font-style="italic">implements</text>
-
-  <!-- Vector wraps Column + NullBitmap — cross-layer arrows (dashed blue) -->
-  <!-- from Vector (exec layer, y~200) down to Column iface (y~500) -->
-  <line x1="960" y1="200" x2="960" y2="500" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="970" y="395" fill="#58a6ff" font-size="12">wraps</text>
-  <!-- from Vector down to NullBitmap -->
-  <path d="M 830 200 Q 500 420 260 640" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="470" y="430" fill="#58a6ff" font-size="12">+ NullBitmap</text>
-
-  <!-- ScanOp reads from RowGroup — cross-layer -->
-  <path d="M 150 200 Q 100 430 150 500" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="58" y="430" fill="#58a6ff" font-size="12">reads</text>
-
-  <!-- ============================== -->
-  <!-- LAYER 3: PERSISTENCE           -->
-  <!-- ============================== -->
-  <rect x="20" y="800" width="1160" height="230" rx="10"
-        fill="#0d1824" stroke="#79c0ff" stroke-opacity="0.35"/>
-  <text x="38" y="828" fill="#79c0ff" font-weight="700" font-size="14">storage/ (writer+reader) &amp; encoding/ — PERSISTENCE</text>
-  <text x="38" y="846" fill="#8b949e" font-size="12">in-memory RowGroup ⇄ .cldb file via typed encodings and LZ4 compression</text>
-
-  <!-- Writer -->
-  <g>
-    <rect x="60" y="870" width="220" height="120" rx="6" fill="#121e2c" stroke="#79c0ff"/>
-    <text x="170" y="894" text-anchor="middle" fill="#79c0ff" font-weight="700">SingleFileWriter</text>
-    <line x1="72" y1="904" x2="268" y2="904" stroke="#30363d"/>
-    <text x="72" y="930" fill="#c9d1d9">+ WriteRowGroup(rg)</text>
-    <text x="72" y="952" fill="#c9d1d9">+ Close()</text>
-  </g>
-
-  <!-- Encoding -->
-  <g>
-    <rect x="330" y="870" width="300" height="120" rx="6"
-          fill="#1c142a" stroke="#d2a8ff"/>
-    <text x="480" y="894" text-anchor="middle" fill="#d2a8ff" font-weight="700">encoding/ · «interface» Encoder</text>
-    <line x1="342" y1="904" x2="618" y2="904" stroke="#30363d"/>
-    <text x="342" y="926" fill="#c9d1d9">PlainEncoder</text>
-    <text x="342" y="946" fill="#c9d1d9">RLEEncoder</text>
-    <text x="342" y="966" fill="#c9d1d9">DictEncoder</text>
-    <text x="342" y="986" fill="#c9d1d9">DeltaEncoder</text>
-  </g>
-
-  <!-- LZ4 -->
-  <g>
-    <rect x="680" y="870" width="200" height="120" rx="6"
-          fill="#1c142a" stroke="#d2a8ff"/>
-    <text x="780" y="894" text-anchor="middle" fill="#d2a8ff" font-weight="700">LZ4Compressor</text>
-    <line x1="692" y1="904" x2="868" y2="904" stroke="#30363d"/>
-    <text x="692" y="930" fill="#c9d1d9">+ Compress(b)</text>
-    <text x="692" y="952" fill="#c9d1d9">+ Decompress(b)</text>
-  </g>
-
-  <!-- Reader -->
-  <g>
-    <rect x="930" y="870" width="210" height="120" rx="6" fill="#121e2c" stroke="#79c0ff"/>
-    <text x="1035" y="894" text-anchor="middle" fill="#79c0ff" font-weight="700">SingleFileReader</text>
-    <line x1="942" y1="904" x2="1128" y2="904" stroke="#30363d"/>
-    <text x="942" y="930" fill="#c9d1d9">+ Open(path)</text>
-    <text x="942" y="952" fill="#c9d1d9">+ ReadRowGroup(i)</text>
-  </g>
-
-  <!-- persistence edges: writer → encoder → lz4 → disk, disk → lz4 → encoder → reader -->
-  <line x1="280" y1="930" x2="330" y2="930" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="630" y1="930" x2="680" y2="930" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="880" y1="930" x2="930" y2="930" stroke="#58a6ff" stroke-width="2" marker-start="url(#arrow)"/>
-
-  <!-- writer up to RowGroup, reader up to RowGroup -->
-  <path d="M 170 870 Q 180 810 190 770" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="110" y="840" fill="#58a6ff" font-size="12">from RowGroup</text>
-
-  <path d="M 1035 870 Q 1020 810 1000 770" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
-  <text x="1045" y="840" fill="#58a6ff" font-size="12">to RowGroup</text>
-
+  <!-- Inter-layer arrows -->
+  <line x1="400" y1="80" x2="400" y2="100" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="400" y1="190" x2="400" y2="210" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="400" y1="300" x2="400" y2="320" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="400" y1="400" x2="400" y2="420" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow)"/>
 </svg>
 
-  <h2>Key Concepts</h2>
+  <h2>Query Pipeline</h2>
+<pre><code>SELECT city, COUNT(*), AVG(age)
+FROM people WHERE age > 30
+GROUP BY city ORDER BY city
 
-  <table>
-    <thead>
-      <tr>
-        <th>Type</th>
-        <th>Role</th>
-        <th>Lives in</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td class="pkg-exec"><code>Operator</code> (interface)</td>
-        <td>Pull-based contract: <code>Next() (*Batch, bool)</code> + <code>Reset()</code>. Every operator implements it; pipelines compose by wrapping children.</td>
-        <td><code>exec/operator.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-exec"><code>ScanOp</code></td>
-        <td>Source: walks a <code>RowGroup</code> in ≤1024-row batches, yields a reused <code>*Batch</code> with full <code>Sel</code>.</td>
-        <td><code>exec/scan.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-exec"><code>FilterOp</code></td>
-        <td>Narrows <code>Batch.Sel</code> via a <code>Predicate</code>. Vectors untouched; O(1) pointer swap with a scratch selection. Fully-filtered batches skipped.</td>
-        <td><code>exec/filter.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-exec"><code>ProjectOp</code></td>
-        <td>Drops/reorders columns by pointer-aliasing a subset of the child's Vectors. <code>Sel</code> passes through. Zero copy.</td>
-        <td><code>exec/project.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-exec"><code>AggregateOp</code></td>
-        <td>Scalar aggregation (no GROUP BY). Drains child → 1-row result. Uses <code>Aggregator</code> interface (Count/Sum/Min/Max/Avg × int64/float64).</td>
-        <td><code>exec/aggregate.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-exec"><code>GroupByOp</code></td>
-        <td>Hash GROUP BY: single-key fast path (<code>map[int64/string]</code>) or multi-key composite path. Cursor-based multi-batch emission, unbounded groups.</td>
-        <td><code>exec/groupby.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-exec"><code>OrderByOp</code></td>
-        <td>Blocking sort: drains child, collects rows column-wise, sorts via stable permutation, emits in VectorSize batches. Single column, ASC/DESC.</td>
-        <td><code>exec/orderby.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-exec"><code>LimitOp</code></td>
-        <td>Pass-through that caps output rows by narrowing the final batch's <code>Selection</code>.</td>
-        <td><code>exec/limit.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-exec"><code>Predicate</code> (interface)</td>
-        <td><code>Eval(vec, in, out *Selection)</code>. Int64: <code>Eq / Ne / Lt / Le / Gt / Ge</code>. String: <code>Eq</code>. Nulls never match.</td>
-        <td><code>exec/predicate.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-exec"><code>Batch</code></td>
-        <td>Aligned <code>Vectors []*Vector</code> + <code>Sel *Selection</code>. Row <em>i</em> is the same tuple across all columns.</td>
-        <td><code>exec/batch.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-exec"><code>Vector</code></td>
-        <td>One column's ≤1024-row batch. Wraps a typed <code>storage.Column</code> + <code>NullBitmap</code>. <code>Int64s() / Float64s() / ...</code> expose raw slices for hot loops.</td>
-        <td><code>exec/vector.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-exec"><code>Selection</code></td>
-        <td>Compact <code>[]uint16</code> of live row indices inside a batch. The late-materialization primitive: vectors never shrink, only this index list does.</td>
-        <td><code>exec/selection.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-storage"><code>RowGroup</code></td>
-        <td>Horizontal slice of a table — a bundle of <code>ColumnChunk</code>s sharing a row count. Unit of parallel read and skip-scan.</td>
-        <td><code>storage/rowgroup.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-storage"><code>ColumnChunk</code></td>
-        <td>Named + typed column: <code>Column</code> values + <code>NullBitmap</code> + stats (min/max/null count).</td>
-        <td><code>storage/chunk.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-storage"><code>Column</code> (interface)</td>
-        <td>Typed contiguous array. Concrete: <code>Int64Column</code>, <code>Float64Column</code>, <code>StringColumn</code>, <code>BoolColumn</code>.</td>
-        <td><code>storage/types.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-storage"><code>NullBitmap</code></td>
-        <td>Bit-packed null tracking — 1 bit per row, 8× smaller than <code>[]bool</code>. Shared between <code>ColumnChunk</code> and <code>Vector</code>.</td>
-        <td><code>storage/bitmap.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-disk"><code>SingleFileWriter / Reader</code></td>
-        <td>.cldb binary format. Layout: magic <code>CLDB</code> → row groups → footer → footer length (4B LE) → magic. Footer-at-end, seekable, Parquet-style.</td>
-        <td><code>storage/writer.go</code>, <code>reader.go</code>, <code>format.go</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-encoding"><code>Encoder</code> (interface)</td>
-        <td>Column-aware compression: <code>Plain</code>, <code>RLE</code>, <code>Dictionary</code>, <code>Delta</code>. Writer picks per chunk; metadata records the choice.</td>
-        <td><code>encoding/</code></td>
-      </tr>
-      <tr>
-        <td class="pkg-encoding"><code>LZ4Compressor</code></td>
-        <td>Block compression on top of the column encoding — operates on encoded bytes.</td>
-        <td><code>encoding/lz4.go</code></td>
-      </tr>
-      <tr>
-        <td style="color:#d2a8ff"><code>Tokenize / Parse / Plan</code></td>
-        <td>SQL frontend: zero-alloc-per-token lexer → recursive-descent parser → rule-based planner producing exec.Operator trees.</td>
-        <td><code>sql/</code></td>
-      </tr>
-      <tr>
-        <td style="color:#d2a8ff"><code>Execute</code></td>
-        <td>Entry point: <code>Execute(rg, query) → (exec.Operator, error)</code>. One RowGroup = one table. Streaming result via <code>Next()/Reset()</code>.</td>
-        <td><code>sql/sql.go</code></td>
-      </tr>
-    </tbody>
-  </table>
+  ScanOp          ← reads RowGroup, yields Batches
+    ↓
+  FilterOp        ← narrows selection (age > 30)
+    ↓
+  GroupByOp       ← hashes by city, runs aggregators
+    ↓
+  OrderByOp       ← sorts result by city ASC
+    ↓
+  results</code></pre>
 
   <h2>Data Flow</h2>
+  <p><strong>SQL path:</strong> Tokenize → Parse → Plan → exec.Operator tree → consumer drains via <code>Next()</code></p>
+  <p><strong>Write path:</strong> typed Columns + NullBitmap → ColumnChunks → RowGroup → Encoder → LZ4 → bytes on disk</p>
+  <p><strong>Read path:</strong> open file, read footer → decompress + decode → in-memory RowGroup</p>
 
-  <div class="flow">
-    <strong>Write</strong> &nbsp; typed <code>Column</code>s + <code>NullBitmap</code> <span class="arrow">→</span> <code>ColumnChunk</code>s <span class="arrow">→</span> <code>RowGroup</code> <span class="arrow">→</span> <code>SingleFileWriter</code> <span class="arrow">→</span> per-chunk <code>Encoder</code> <span class="arrow">→</span> <code>LZ4</code> <span class="arrow">→</span> bytes; footer appended on <code>Close()</code>.
-    <br><br>
-    <strong>Read</strong> &nbsp; <code>SingleFileReader</code>.Open reads footer <span class="arrow">→</span> <code>ReadRowGroup(i)</code> decompresses + decodes <span class="arrow">→</span> in-memory <code>RowGroup</code>.
-    <br><br>
-    <strong>SQL</strong> &nbsp; <code>Tokenize</code> (zero-alloc per token) <span class="arrow">→</span> <code>Parse</code> (recursive descent → AST) <span class="arrow">→</span> <code>Plan</code> (AST → exec.Operator tree) <span class="arrow">→</span> consumer drains via <code>Next()</code>.
-    <br><br>
-    <strong>Execute</strong> &nbsp; <code>ScanOp</code> (reused Batch, full <code>Sel</code>) <span class="arrow">→</span> <code>FilterOp</code> (swaps <code>Sel</code>) <span class="arrow">→</span> <code>GroupByOp</code> / <code>AggregateOp</code> <span class="arrow">→</span> <code>OrderByOp</code> (sort) <span class="arrow">→</span> <code>LimitOp</code> (cap) <span class="arrow">→</span> consumer iterates <code>b.Sel.Indices()</code>.
+  <h2>Component Details</h2>
+  <div class="card-grid">
+    <div class="card"><a href="storage.html">
+      <h3>Storage</h3>
+      <p>Column chunks, row groups, null bitmaps, file I/O</p>
+    </a></div>
+    <div class="card"><a href="encoding.html">
+      <h3>Encoding</h3>
+      <p>RLE, dictionary, delta, LZ4 compression</p>
+    </a></div>
+    <div class="card"><a href="execution.html">
+      <h3>Execution</h3>
+      <p>Vectorized operators, batches of 1024</p>
+    </a></div>
+    <div class="card"><a href="sql.html">
+      <h3>SQL Frontend</h3>
+      <p>Hand-rolled lexer, parser, planner</p>
+    </a></div>
   </div>
 
-  <h2>Invariants</h2>
-
-  <ul>
-    <li><strong>Layout</strong> — <code>Vector.Values.Len() == length</code>: nulls store a zero placeholder so row <em>i</em> is the same position in the typed slice and the bitmap.</li>
-    <li><strong>Alignment</strong> — every <code>Vector</code> in a <code>Batch</code> has identical <code>Len()</code>. Row <em>i</em> is the same tuple across columns. Only <code>Sel</code> shrinks.</li>
-    <li><strong>Zero-alloc hot path</strong> — <code>Batch</code> / <code>Vector</code> / <code>Selection</code> allocated once at operator construction and recycled via <code>Reset()</code>. Enforced by <code>AllocsPerRun</code> tests.</li>
-    <li><strong>Late materialization</strong> — no operator rebuilds rows. Values stay column-wise from disk to the final result.</li>
-  </ul>
-
+  <footer>
+    <p><a href="index.html">&larr; Back to overview</a></p>
+  </footer>
 </div>
 </body>
 </html>
