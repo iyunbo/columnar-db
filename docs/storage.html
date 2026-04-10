@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Storage — Columnar DB</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="container">
+  <nav>
+    <a href="index.html" class="brand">Columnar DB</a>
+    <a href="index.html">Overview</a>
+    <a href="arch.html">Architecture</a>
+    <a href="storage.html" class="active">Storage</a>
+    <a href="encoding.html">Encoding</a>
+    <a href="execution.html">Execution</a>
+    <a href="sql.html">SQL</a>
+    <a href="https://github.com/iyunbo/columnar-db">GitHub</a>
+  </nav>
+
+  <h1>Storage</h1>
+  <p class="subtitle">Column-oriented storage with typed arrays, null bitmaps, and a single-file format.</p>
+
+  <h2>Column Types</h2>
+  <p>Four concrete types, each backed by a native Go slice:</p>
+  <table>
+    <thead><tr><th>Type</th><th>Go backing</th><th>File</th></tr></thead>
+    <tbody>
+      <tr><td><code>Int64</code></td><td><code>[]int64</code></td><td>int64.go</td></tr>
+      <tr><td><code>Float64</code></td><td><code>[]float64</code></td><td>float64.go</td></tr>
+      <tr><td><code>String</code></td><td><code>[]string</code></td><td>string.go</td></tr>
+      <tr><td><code>Bool</code></td><td><code>[]bool</code></td><td>bool.go</td></tr>
+    </tbody>
+  </table>
+
+  <h2>ColumnChunk</h2>
+  <p>The fundamental unit of storage. Each chunk holds:</p>
+  <ul style="margin-bottom: 1.5rem; padding-left: 1.5rem;">
+    <li>A <strong>typed array</strong> of values (one of the four types above)</li>
+    <li>A <strong>NullBitmap</strong> — bit-packed, 0 = not null, 1 = null</li>
+    <li><strong>Stats</strong> — min, max, null count (used for predicate pushdown)</li>
+  </ul>
+
+  <h2>NullBitmap</h2>
+  <p>Bit-packed representation where each bit tracks one row's null status. Uses <code>uint64</code> words internally — 64 rows per word. Operations:</p>
+<pre><code>bitmap.Set(i)       // mark row i as null
+bitmap.IsNull(i)    // check if row i is null
+bitmap.NullCount()  // count nulls</code></pre>
+
+  <h2>RowGroup</h2>
+  <p>A collection of ColumnChunks that share the same row count. The RowGroup is the unit of I/O — the execution engine reads one RowGroup at a time.</p>
+  <div class="diagram">RowGroup (N rows)
+├── ColumnChunk "name"    [string × N]  + bitmap
+├── ColumnChunk "age"     [int64  × N]  + bitmap
+├── ColumnChunk "city"    [string × N]  + bitmap
+└── ColumnChunk "salary"  [float64× N]  + bitmap</div>
+
+  <h2>File Format</h2>
+  <p>Single-file columnar format, similar to Parquet:</p>
+  <div class="diagram">┌──────────────┐
+│  Magic (8B)  │
+├──────────────┤
+│  RowGroup 0  │
+│  RowGroup 1  │
+│     ...      │
+├──────────────┤
+│   Footer     │  ← column names, types, offsets
+├──────────────┤
+│  Magic (8B)  │
+└──────────────┘</div>
+  <p>The footer stores metadata (column names, types, byte offsets) so the reader can seek directly to any column without scanning the whole file.</p>
+
+  <h2>Files</h2>
+  <table>
+    <thead><tr><th>File</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td><code>types.go</code></td><td>Column type enum and interface</td></tr>
+      <tr><td><code>chunk.go</code></td><td>ColumnChunk struct and methods</td></tr>
+      <tr><td><code>rowgroup.go</code></td><td>RowGroup — collection of chunks</td></tr>
+      <tr><td><code>bitmap.go</code></td><td>Bit-packed null bitmap</td></tr>
+      <tr><td><code>format.go</code></td><td>File header, footer, metadata structs</td></tr>
+      <tr><td><code>writer.go</code></td><td>Serialize row groups to disk</td></tr>
+      <tr><td><code>reader.go</code></td><td>Deserialize row groups from disk</td></tr>
+    </tbody>
+  </table>
+
+  <footer>
+    <p><a href="arch.html">&larr; Architecture</a> &middot; <a href="encoding.html">Encoding &rarr;</a></p>
+  </footer>
+</div>
+</body>
+</html>

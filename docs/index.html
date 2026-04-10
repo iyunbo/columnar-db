@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Columnar DB</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="container">
+  <nav>
+    <a href="index.html" class="brand">Columnar DB</a>
+    <a href="index.html" class="active">Overview</a>
+    <a href="arch.html">Architecture</a>
+    <a href="storage.html">Storage</a>
+    <a href="encoding.html">Encoding</a>
+    <a href="execution.html">Execution</a>
+    <a href="sql.html">SQL</a>
+    <a href="https://github.com/iyunbo/columnar-db">GitHub</a>
+  </nav>
+
+  <h1>Columnar DB</h1>
+  <p class="subtitle">A column-oriented analytical database built from scratch in Go, inspired by DuckDB &amp; ClickHouse.</p>
+
+  <div class="stats">
+    <div class="stat"><span class="num">~19K</span><span class="label">Lines of Go</span></div>
+    <div class="stat"><span class="num">474</span><span class="label">Tests</span></div>
+    <div class="stat"><span class="num">0</span><span class="label">External deps</span></div>
+    <div class="stat"><span class="num">5</span><span class="label">Phases</span></div>
+  </div>
+
+  <h2>Quick Start</h2>
+<pre><code>go run ./cmd/columnar-db
+
+columnar-db&gt; SELECT city, COUNT(*), AVG(age) FROM people GROUP BY city ORDER BY city
+city     | COUNT(*) | AVG(age)
+---------+----------+---------
+Beijing  | 166      | 47.82
+Kunming  | 184      | 45.51
+Lyon     | 156      | 44.48
+Paris    | 165      | 44.72
+Shanghai | 174      | 44.94
+Tokyo    | 155      | 45.02
+(6 rows)</code></pre>
+
+  <p>The REPL ships with a 1000-row demo dataset. Type <code>.schema</code> to see columns, <code>.help</code> for syntax, <code>.quit</code> to exit.</p>
+
+  <h2>SQL Subset</h2>
+<pre><code>SELECT { * | col [, ...] | agg(col) [, ...] }
+FROM table
+[WHERE col { = | != | &lt; | &lt;= | &gt; | &gt;= } literal]
+[GROUP BY col [, col ...]]
+[ORDER BY col [ASC | DESC]]
+[LIMIT n]</code></pre>
+  <p>Aggregates: <code>COUNT(*)</code>, <code>COUNT(col)</code>, <code>SUM</code>, <code>MIN</code>, <code>MAX</code>, <code>AVG</code> on Int64 and Float64.</p>
+
+  <h2>Components</h2>
+  <div class="card-grid">
+    <div class="card"><a href="storage.html">
+      <h3>Storage</h3>
+      <p>Column chunks, row groups, null bitmaps, file I/O</p>
+    </a></div>
+    <div class="card"><a href="encoding.html">
+      <h3>Encoding</h3>
+      <p>RLE, dictionary, delta encoding + LZ4 compression</p>
+    </a></div>
+    <div class="card"><a href="execution.html">
+      <h3>Execution</h3>
+      <p>Vectorized operators, batches of 1024, late materialization</p>
+    </a></div>
+    <div class="card"><a href="sql.html">
+      <h3>SQL Frontend</h3>
+      <p>Hand-rolled lexer, parser, planner, and REPL</p>
+    </a></div>
+  </div>
+
+  <h2>Key Concepts</h2>
+  <table>
+    <tr><td><strong>Columnar storage</strong></td><td>Contiguous typed arrays + null bitmaps, not row tuples</td></tr>
+    <tr><td><strong>Vectorized execution</strong></td><td>Process ~1024 values per batch in tight typed loops</td></tr>
+    <tr><td><strong>Late materialization</strong></td><td>Selection vectors narrow live rows without copying data</td></tr>
+    <tr><td><strong>Zero-alloc hot path</strong></td><td>Per-batch Update/Finalize allocates nothing at steady state</td></tr>
+  </table>
+
+  <h2>Build Phases</h2>
+  <table>
+    <thead><tr><th>Phase</th><th>Topic</th><th>Highlight</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Column Storage</td><td>Types, null bitmap, row groups, file format</td></tr>
+      <tr><td>2</td><td>Encoding</td><td>RLE, dictionary, delta, LZ4</td></tr>
+      <tr><td>3</td><td>Vectorized Scan</td><td>Batch processing, filters, selection vectors</td></tr>
+      <tr><td>4</td><td>Aggregation</td><td>Hash GROUP BY, 1.67x speedup on high-cardinality</td></tr>
+      <tr><td>5</td><td>SQL Frontend</td><td>Lexer, parser, planner &mdash; +0.3% overhead vs direct API</td></tr>
+    </tbody>
+  </table>
+
+  <footer>
+    <p><strong>Yunbo WANG</strong> &mdash; <a href="https://github.com/iyunbo/columnar-db">GitHub</a> &middot; <a href="https://linkedin.com/in/yunbo-wang">LinkedIn</a></p>
+  </footer>
+</div>
+</body>
+</html>

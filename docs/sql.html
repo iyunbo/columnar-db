@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SQL Frontend — Columnar DB</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="container">
+  <nav>
+    <a href="index.html" class="brand">Columnar DB</a>
+    <a href="index.html">Overview</a>
+    <a href="arch.html">Architecture</a>
+    <a href="storage.html">Storage</a>
+    <a href="encoding.html">Encoding</a>
+    <a href="execution.html">Execution</a>
+    <a href="sql.html" class="active">SQL</a>
+    <a href="https://github.com/iyunbo/columnar-db">GitHub</a>
+  </nav>
+
+  <h1>SQL Frontend</h1>
+  <p class="subtitle">Hand-rolled lexer, recursive-descent parser, and query planner. No external parser generators.</p>
+
+  <h2>Pipeline</h2>
+  <div class="diagram">SQL string
+    ↓  Tokenize()
+Token stream
+    ↓  Parse()
+AST (SelectStmt)
+    ↓  Plan()
+Operator tree
+    ↓  drain Next()
+Results</div>
+
+  <h2>Lexer</h2>
+  <p>Single-pass, allocation-free tokenizer. Scans the SQL string left-to-right, emitting tokens for keywords, identifiers, numbers, strings, and operators.</p>
+  <p>Tokens: <code>SELECT</code>, <code>FROM</code>, <code>WHERE</code>, <code>GROUP</code>, <code>BY</code>, <code>ORDER</code>, <code>ASC</code>, <code>DESC</code>, <code>LIMIT</code>, <code>AS</code>, identifiers, numbers, quoted strings, comparison operators, <code>*</code>, <code>,</code>, <code>(</code>, <code>)</code>.</p>
+
+  <h2>Parser</h2>
+  <p>Hand-rolled recursive-descent parser. Produces a <code>SelectStmt</code> AST:</p>
+<pre><code>type SelectStmt struct {
+    Items    []SelectItem    // columns or aggregates
+    Table    string          // FROM table
+    Where    *Predicate      // optional WHERE
+    GroupBy  []string        // optional GROUP BY columns
+    OrderBy  *OrderByClause  // optional ORDER BY
+    Limit    *int            // optional LIMIT
+}</code></pre>
+
+  <h2>Planner</h2>
+  <p>Translates the AST into an operator tree. The planner picks the right operators based on what the query needs:</p>
+  <table>
+    <thead><tr><th>Query pattern</th><th>Operator tree</th></tr></thead>
+    <tbody>
+      <tr><td>Simple select</td><td>Scan → [Filter] → [Project]</td></tr>
+      <tr><td>Aggregate (no GROUP BY)</td><td>Scan → [Filter] → Aggregate</td></tr>
+      <tr><td>GROUP BY</td><td>Scan → [Filter] → GroupBy</td></tr>
+      <tr><td>+ ORDER BY</td><td>… → OrderBy</td></tr>
+      <tr><td>+ LIMIT</td><td>… → Limit</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Supported SQL</h2>
+<pre><code>SELECT { * | col [, ...] | agg(col) [, ...] }
+FROM table
+[WHERE col { = | != | &lt; | &lt;= | &gt; | &gt;= } literal]
+[GROUP BY col [, col ...]]
+[ORDER BY col [ASC | DESC]]
+[LIMIT n]</code></pre>
+  <p>Aggregates: <code>COUNT(*)</code>, <code>COUNT(col)</code>, <code>SUM</code>, <code>MIN</code>, <code>MAX</code>, <code>AVG</code>.</p>
+
+  <h2>Performance</h2>
+  <p>SQL overhead vs direct operator API calls (with statement reuse via Reset):</p>
+  <table>
+    <thead><tr><th>Scenario</th><th>Overhead</th></tr></thead>
+    <tbody>
+      <tr><td>Low cardinality</td><td>+0.3%</td></tr>
+      <tr><td>High cardinality</td><td>+3.8%</td></tr>
+    </tbody>
+  </table>
+  <p>The SQL layer adds negligible overhead because the planner builds the same operator tree you'd build by hand.</p>
+
+  <h2>Known Limitations</h2>
+  <ul style="margin-bottom: 1.5rem; padding-left: 1.5rem;">
+    <li>No <code>AND</code> / <code>OR</code> in WHERE (single predicate only)</li>
+    <li>No <code>HAVING</code>, <code>JOIN</code>, subqueries, or <code>DISTINCT</code></li>
+    <li>Single table only</li>
+    <li>No expression evaluation in SELECT (e.g. <code>col + 1</code>)</li>
+  </ul>
+
+  <h2>Files</h2>
+  <table>
+    <thead><tr><th>File</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td><code>sql.go</code></td><td>Entry point: <code>Execute(rg, query)</code></td></tr>
+      <tr><td><code>token.go</code></td><td>Token kinds and struct</td></tr>
+      <tr><td><code>lexer.go</code></td><td>Single-pass tokenizer</td></tr>
+      <tr><td><code>ast.go</code></td><td>AST types (SelectStmt, etc.)</td></tr>
+      <tr><td><code>parser.go</code></td><td>Recursive-descent parser</td></tr>
+      <tr><td><code>planner.go</code></td><td>AST → Operator tree</td></tr>
+    </tbody>
+  </table>
+
+  <footer>
+    <p><a href="execution.html">&larr; Execution</a> &middot; <a href="index.html">Back to overview</a></p>
+  </footer>
+</div>
+</body>
+</html>

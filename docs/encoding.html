@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Encoding — Columnar DB</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="container">
+  <nav>
+    <a href="index.html" class="brand">Columnar DB</a>
+    <a href="index.html">Overview</a>
+    <a href="arch.html">Architecture</a>
+    <a href="storage.html">Storage</a>
+    <a href="encoding.html" class="active">Encoding</a>
+    <a href="execution.html">Execution</a>
+    <a href="sql.html">SQL</a>
+    <a href="https://github.com/iyunbo/columnar-db">GitHub</a>
+  </nav>
+
+  <h1>Encoding</h1>
+  <p class="subtitle">Four encoding schemes plus LZ4 general compression. Applied per-column based on data characteristics.</p>
+
+  <h2>Encoding Schemes</h2>
+
+  <h3>Plain</h3>
+  <p>Raw serialization with no transformation. Baseline for comparison and fallback when no specialized encoding helps.</p>
+
+  <h3>Run-Length Encoding (RLE)</h3>
+  <p>Stores consecutive repeated values as (value, count) pairs. Effective for sorted columns or low-cardinality data like status codes.</p>
+<pre><code>// Input:  [A, A, A, B, B, C, C, C, C]
+// Stored: [(A,3), (B,2), (C,4)]</code></pre>
+
+  <h3>Dictionary Encoding</h3>
+  <p>Replaces string values with integer indices into a dictionary. Best for low-cardinality string columns like city names or categories.</p>
+<pre><code>// Dictionary: {0: "Paris", 1: "Tokyo", 2: "Beijing"}
+// Input:  ["Paris", "Tokyo", "Paris", "Beijing"]
+// Stored: [0, 1, 0, 2]</code></pre>
+
+  <h3>Delta Encoding</h3>
+  <p>Stores the difference between consecutive values. Ideal for monotonically increasing integers like timestamps or auto-increment IDs.</p>
+<pre><code>// Input:  [100, 102, 105, 110]
+// Stored: [100, +2, +3, +5]   ← smaller values = fewer bits</code></pre>
+
+  <h2>LZ4 Compression</h2>
+  <p>General-purpose block compression applied after encoding. Fast decompression with decent ratios — the same tradeoff DuckDB and ClickHouse make.</p>
+
+  <h2>Pipeline</h2>
+  <p>Encoding is applied as a pipeline: first a type-specific encoding (RLE, dictionary, or delta), then optional LZ4 compression on the result.</p>
+  <div class="diagram">Raw column data
+    ↓
+Type-specific encoding (auto-selected)
+    ↓
+LZ4 block compression (optional)
+    ↓
+Stored bytes</div>
+
+  <p>The encoder auto-selects the best scheme per column based on cardinality and data type heuristics.</p>
+
+  <h2>When Each Encoding Wins</h2>
+  <table>
+    <thead><tr><th>Encoding</th><th>Best for</th><th>Example</th></tr></thead>
+    <tbody>
+      <tr><td>RLE</td><td>Many consecutive repeats</td><td>Sorted status column</td></tr>
+      <tr><td>Dictionary</td><td>Low-cardinality strings</td><td>City names, categories</td></tr>
+      <tr><td>Delta</td><td>Monotonic integers</td><td>Timestamps, row IDs</td></tr>
+      <tr><td>Plain + LZ4</td><td>Everything else</td><td>Random numeric data</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Files</h2>
+  <table>
+    <thead><tr><th>File</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td><code>encoder.go</code></td><td>Interface + auto-selection logic</td></tr>
+      <tr><td><code>plain.go</code></td><td>No-op baseline encoding</td></tr>
+      <tr><td><code>rle.go</code></td><td>Run-length encoding</td></tr>
+      <tr><td><code>dictionary.go</code></td><td>Dictionary encoding for strings</td></tr>
+      <tr><td><code>delta.go</code></td><td>Delta encoding for integers</td></tr>
+      <tr><td><code>lz4.go</code></td><td>LZ4 block compression</td></tr>
+      <tr><td><code>pipeline.go</code></td><td>Encoding pipeline orchestration</td></tr>
+    </tbody>
+  </table>
+
+  <footer>
+    <p><a href="storage.html">&larr; Storage</a> &middot; <a href="execution.html">Execution &rarr;</a></p>
+  </footer>
+</div>
+</body>
+</html>

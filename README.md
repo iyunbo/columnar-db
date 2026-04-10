@@ -2,6 +2,8 @@
 
 A column-oriented analytical database built from scratch in Go — inspired by DuckDB & ClickHouse.
 
+**[Documentation](https://iyunbo.github.io/columnar-db/)**
+
 ## Quick Start
 
 ```bash
